@@ -1,0 +1,11 @@
+#Requerimentos (launch faz o download de todos versionados no primeiro uso):
+pymupdf>=1.26
+scikit-learn>=1.3
+numpy>=1.24
+python-docx>=1.1
+pandas>=2.1
+scipy>=1.11
+matplotlib>=3.8
+openpyxl>=3.1
+XlsxWriter>=3.1
+Pillow>=10.0
