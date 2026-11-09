@@ -1,11 +1,9 @@
-"""Geração da síntese e ficha."""
+"""Output em .docx (resumo e fichas)."""
 
 from __future__ import annotations
 
 import io
 import re
-import sys
-import os
 from pathlib import Path
 
 from docx import Document
@@ -14,14 +12,14 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 from typing import Any
 from .citations import ordenar_referencias, referencia_abnt
-from .files import ler_bytes
-from .grammar import pl
+from .file_io import ler_bytes
+from .pluralization import pl
 from .models import Artigo
-from .writing import IT_FIM, IT_INI, Documento
+from .summary_writer import IT_FIM, IT_INI, Documento
 
 
+# Estilos e auxiliares
 FONTE = "Times New Roman"
-
 
 def _configurar_estilos(doc: Any) -> None:
     for secao in doc.sections:
@@ -52,7 +50,6 @@ def _configurar_estilos(doc: Any) -> None:
         estilo.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
 
 def _escrever_trechos(paragrafo, texto: str, tamanho: Pt | None = None) -> None:
-    """Escreve o texto respeitando os marcadores de itálico."""
     partes = re.split(f"({IT_INI}.*?{IT_FIM})", texto)
     for parte in partes:
         if not parte:
@@ -64,13 +61,13 @@ def _escrever_trechos(paragrafo, texto: str, tamanho: Pt | None = None) -> None:
             run.font.size = tamanho
 
 
+# Resumo
 NOTAS = {
     "pdf": "a partir da leitura integral de {n} em PDF, {lidos} diretamente (sem conversão intermediária)",
     "md": "a partir da leitura integral de {n} em Markdown",
     "ris": "a partir dos resumos de {n} (RIS); como não há texto integral, as citações "
            "diretas vêm dos resumos e não indicam página",
 }
-
 
 def gerar_docx(documento: Documento, artigos: list[Artigo], destino: Path, titulo: str, tipo: str = "pdf") -> None:
     por_chave = {a.chave: a for a in artigos}
@@ -129,6 +126,8 @@ def gerar_docx(documento: Documento, artigos: list[Artigo], destino: Path, titul
     destino.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(destino))
 
+
+# Fichas e relatório
 def _tabela(doc: Any, cabecalho: list[str], linhas: list[list[str]], tamanho: float = 9, larguras=None):
     tab = doc.add_table(rows=1, cols=len(cabecalho))
     tab.style = "Table Grid"
@@ -177,7 +176,6 @@ def gerar_ficha_relatorio(artigos: list[Artigo], eixos, documento: Documento, fa
     sub.add_run(titulo).italic = True
     sub.paragraph_format.space_after = Pt(18)
 
-    # Relatório
     doc.add_heading("1 RELATÓRIO DE PROCESSAMENTO", level=1)
     for rotulo, valor in info.items():
         _campo(doc, rotulo, str(valor))
@@ -196,7 +194,7 @@ def gerar_ficha_relatorio(artigos: list[Artigo], eixos, documento: Documento, fa
     nota.runs[0].font.size = Pt(9)
     if situacao:
         doc.add_heading("1.3 Situação de cada arquivo", level=2)
-        ordem = {"f": 0, "n": 1, "d": 2, "a": 3}  # falhas e não analisados primeiro
+        ordem = {"f": 0, "n": 1, "d": 2, "a": 3}
         _tabela(doc, ["Arquivo", "Situação"],
                 [[n, s] for n, s in sorted(situacao.items(), key=lambda kv: (ordem.get(kv[1][:1], 4), kv[0].lower()))],
                 tamanho=8, larguras=[8.0, 8.0])
@@ -206,7 +204,6 @@ def gerar_ficha_relatorio(artigos: list[Artigo], eixos, documento: Documento, fa
             p = doc.add_paragraph(f.replace("`", ""), style="List Bullet")
             p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
 
-    # Fichas
     doc.add_page_break()
     doc.add_heading("2 FICHAS DE LEITURA", level=1)
     intro = doc.add_paragraph(

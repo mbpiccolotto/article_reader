@@ -1,4 +1,4 @@
-"""Leitor de artigos: PDF/ RIS/ MD"""
+"""Leitor de artigos: lê PDF, RIS ou Markdown e gera o resumo integralizado e as fichas de leitura."""
 
 from .config import VERSAO
 

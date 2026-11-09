@@ -7,9 +7,10 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-from .reader import RE_MARCA_PAGINA
+from .document_reader import RE_MARCA_PAGINA
 
 
+# Padrões
 _CATEGORIAS = [
     ("referencias", r"^(references?|referencias(bibliograficas)?|bibliograf|literaturecited|workscited)"),
     ("fim", r"(acknowledg|agradecimento|authorcontribution|creditauthor|contribuicao|funding|financiamento|"
@@ -34,13 +35,15 @@ _RE_LEGENDA = re.compile(
     re.IGNORECASE,
 )
 _RE_IMAGEM = re.compile(r"^\s*(!\[|\*\*==>|<img|picture \[|\[image)", re.IGNORECASE)
-
 ABREVIACOES = {
     "al", "e.g", "i.e", "fig", "figs", "eq", "eqs", "ref", "refs", "tab", "vs", "ca", "approx", "no", "nos",
     "var", "cv", "sp", "spp", "subsp", "etc", "resp", "min", "max", "st", "dr", "prof", "vol", "pp", "p",
     "ed", "eds", "ltd", "inc", "co", "corp", "mr", "ms", "jr", "sr", "dept", "univ", "est", "aprox", "cf",
 }
 
+
+# Títulos e Limpeza
+"""Classifica os títulos e remove a marcação Markdown."""
 
 @dataclass
 class FraseBruta:
@@ -85,7 +88,7 @@ def limpar_marcacao(texto: str) -> tuple[str, bool]:
     texto = re.sub(r"(\*\*|__)", "", texto)
     texto = re.sub(r"(?<![\w*])[*_](?=\S)(.+?)(?<=\S)[*_](?![\w*])", r"\1", texto)
     texto = html.unescape(texto).replace("■", "")
-    texto = re.sub(r"(?:(?<=\s)|^)_+(?=\w)|(?<=\w)_+(?=\s|$|[.,;:])", "", texto)  # sublinhados soltos (OCR)
+    texto = re.sub(r"(?:(?<=\s)|^)_+(?=\w)|(?<=\w)_+(?=\s|$|[.,;:])", "", texto)
     texto = re.sub(r"\s+", " ", texto).strip()
     return texto, cita
 
@@ -93,18 +96,20 @@ def _eh_titulo(linha: str) -> str | None:
     s = linha.strip()
     if s.startswith("#"):
         return re.sub(r"^#+\s*", "", s)
-    
+
     m = re.fullmatch(r"\*\*(.{3,90}?)\*\*\s*", s)
     if m and not m.group(1).rstrip().endswith((".", ":", ";", ",")):
         texto, _ = limpar_marcacao(m.group(1))
         if categorizar_titulo(texto) or RE_NUMERACAO.match(texto):
             return m.group(1)
-    
+
     texto, _ = limpar_marcacao(s)
     if 0 < len(texto.split()) <= 6 and not texto.endswith((".", ",", ";")) and categorizar_titulo(texto):
         return texto
     return None
 
+
+# Leitura
 def ler_markdown(md: str) -> tuple[list[FraseBruta], list[str]]:
     pagina = 1
     categoria = "pre"
@@ -131,30 +136,28 @@ def ler_markdown(md: str) -> tuple[list[FraseBruta], list[str]]:
             continue
         titulo_md = _eh_titulo(linha)
         if titulo_md is not None:
-                fechar()
-                titulo, _ = limpar_marcacao(titulo_md)
-                nova = categorizar_titulo(titulo)
-                numero = RE_NUMERACAO.match(titulo)
-                topo = numero.group(1).split(".")[0] if numero else None
-                if referencias_iniciadas and nova not in _FORTES:
-                    nova = "referencias"
-                if nova:
-                    categoria = nova
-                    if topo:
-                        numero_categoria[topo] = nova
-                    if nova == "referencias":
-                        referencias_iniciadas = True
-                elif topo and numero and topo in numero_categoria and "." in numero.group(1):
-                    categoria = numero_categoria[topo]
-                elif topo and numero and "." not in numero.group(1) and categoria not in ("referencias", "fim"):
-                    categoria = "desenvolvimento"
-                    numero_categoria[topo] = categoria
-                elif categoria == "fim" and not nova:
-                    categoria = "fim"
-                secao = titulo
-        if categoria not in categorias_vistas:
+            fechar()
+            titulo, _ = limpar_marcacao(titulo_md)
+            nova = categorizar_titulo(titulo)
+            numero = RE_NUMERACAO.match(titulo)
+            topo = numero.group(1).split(".")[0] if numero else None
+            if referencias_iniciadas and nova not in _FORTES:
+                nova = "referencias"
+            if nova:
+                categoria = nova
+                if topo:
+                    numero_categoria[topo] = nova
+                if nova == "referencias":
+                    referencias_iniciadas = True
+            elif topo and numero and topo in numero_categoria and "." in numero.group(1):
+                categoria = numero_categoria[topo]
+            elif topo and numero and "." not in numero.group(1) and categoria not in ("referencias", "fim"):
+                categoria = "desenvolvimento"
+                numero_categoria[topo] = categoria
+            secao = titulo
+            if categoria not in categorias_vistas:
                 categorias_vistas.append(categoria)
-                continue
+            continue
         s = linha.strip()
         if not s:
             fechar()
@@ -162,6 +165,8 @@ def ler_markdown(md: str) -> tuple[list[FraseBruta], list[str]]:
         if s.startswith("|") or _RE_IMAGEM.match(s) or _RE_LEGENDA.match(s) or s.startswith("```"):
             fechar()
             continue
+        if categoria not in categorias_vistas:
+            categorias_vistas.append(categoria)
         if not buffer:
             pagina_buffer = pagina
         buffer.append(s)
@@ -178,7 +183,6 @@ def ler_markdown(md: str) -> tuple[list[FraseBruta], list[str]]:
     return frases, categorias_vistas
 
 def _unir_continuacoes(paragrafos):
-    """Une parágrafos quebrados pela virada de página (o anterior não termina e o seguinte começa em minúscula)."""
     unidos = []
     for p in paragrafos:
         if unidos:
@@ -191,8 +195,10 @@ def _unir_continuacoes(paragrafos):
     return unidos
 
 
-_RE_FIM_FRASE = re.compile(r"([.!?])(['\"”’)\]]*)\s+(?=[\"“'(\[]?[A-Z0-9α-ωΑ-Ω])")
+# Divisão
+"""Divide parágrafos em frases."""
 
+_RE_FIM_FRASE = re.compile(r"([.!?])(['\"”’)\]]*)\s+(?=[\"“'(\[]?[A-Z0-9α-ωΑ-Ω])")
 
 def dividir_frases(texto: str) -> list[str]:
     frases, inicio = [], 0
@@ -202,7 +208,7 @@ def dividir_frases(texto: str) -> list[str]:
         if m.group(1) == "." and palavra:
             token = palavra.group(1).lower().strip("([")
             if token in ABREVIACOES or re.fullmatch(r"[a-z]", token) or re.fullmatch(r"[A-Z]", palavra.group(1)):
-                continue  # "et al.", "Fig.", "C. arabica"
+                continue
             if re.fullmatch(r"\d+", token) and re.match(r"\s*\d", texto[m.end():]):
                 continue
         frases.append(texto[inicio:m.end()].strip())

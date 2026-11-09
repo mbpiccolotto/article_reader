@@ -1,12 +1,13 @@
-"""Glossário"""
+"""Glossário (definido pelo user e/ou padrão + IA)."""
 
 from __future__ import annotations
 
 import csv
 from pathlib import Path
 
+
+# Glossário (Termos padrão; EG e PT)
 PADRAO: dict[str, str] = {
-    # processos
     "roasting": "torra", "roasting degree": "grau de torra", "roast degree": "grau de torra", "roasting process": "processo de torra",
     "fermentation": "fermentação", "anaerobic fermentation": "fermentação anaeróbia", "self-induced anaerobic fermentation": "fermentação anaeróbia autoinduzida",
     "solid-state fermentation": "fermentação em estado sólido", "carbonic maceration": "maceração carbônica", "spontaneous fermentation": "fermentação espontânea",
@@ -22,7 +23,6 @@ PADRAO: dict[str, str] = {
     "espresso coffee": "café espresso", "pour-over": "coado (pour-over)", "filter coffee": "café filtrado", "capsules": "cápsulas", "coffee capsules": "cápsulas de café",
     "encapsulation": "encapsulamento", "microencapsulation": "microencapsulação", "ultrasound": "ultrassom", "high pressure processing": "alta pressão", "thermal processing": "processamento térmico",
     "heat treatment": "tratamento térmico", "enzymatic treatment": "tratamento enzimático", "asparaginase": "asparaginase", "concentration": "concentração",
-    # matrizes
     "coffee": "café", "green coffee": "café verde", "green coffee beans": "grãos de café verde", "green beans": "grãos verdes", "roasted coffee": "café torrado",
     "coffee beans": "grãos de café", "specialty coffee": "café especial", "specialty coffees": "cafés especiais", "arabica": "arábica", "coffea arabica": "Coffea arabica",
     "robusta": "robusta", "coffea canephora": "Coffea canephora", "conilon": "conilon", "civet coffee": "café de civeta", "kopi luwak": "kopi luwak",
@@ -30,7 +30,6 @@ PADRAO: dict[str, str] = {
     "by-products": "subprodutos", "spent coffee grounds": "borra de café", "coffee oil": "óleo de café", "coffee brew": "bebida de café", "coffee beverage": "bebida de café",
     "beverage": "bebida", "beverages": "bebidas", "tea": "chá", "black tea": "chá preto", "date seeds": "sementes de tâmara", "date palm": "tamareira", "cocoa": "cacau",
     "instant coffee": "café solúvel", "soluble coffee": "café solúvel", "cultivar": "cultivar", "cultivars": "cultivares", "variety": "variedade", "varieties": "variedades",
-    # química
     "volatile compounds": "compostos voláteis", "volatile compound": "compostos voláteis", "volatiles": "compostos voláteis", "volatile organic compounds": "compostos orgânicos voláteis",
     "volatile profile": "perfil de voláteis", "volatile profiles": "perfis de voláteis", "volatilome": "voloma", "aroma compounds": "compostos de aroma",
     "aroma-active compounds": "compostos odoríferos ativos", "odorants": "odorantes", "key odorants": "odorantes-chave", "flavor compounds": "compostos de sabor",
@@ -44,7 +43,6 @@ PADRAO: dict[str, str] = {
     "proteins": "proteínas", "glycosides": "glicosídeos", "linalool": "linalol", "maillard reaction": "reação de Maillard", "strecker degradation": "degradação de Strecker",
     "lipid oxidation": "oxidação lipídica", "antioxidant activity": "atividade antioxidante", "bioactive compounds": "compostos bioativos", "chemical composition": "composição química",
     "biomarkers": "biomarcadores", "markers": "marcadores", "chemical markers": "marcadores químicos", "quality markers": "marcadores de qualidade",
-    # sensorial e qualidade
     "aroma": "aroma", "flavor": "sabor", "flavour": "sabor", "taste": "gosto", "odor": "odor", "odour": "odor", "aroma profile": "perfil aromático",
     "flavor profile": "perfil de sabor", "sensory": "análise sensorial", "sensory analysis": "análise sensorial", "sensory evaluation": "avaliação sensorial",
     "sensory attributes": "atributos sensoriais", "sensory profile": "perfil sensorial", "sensory quality": "qualidade sensorial", "sensory properties": "propriedades sensoriais",
@@ -52,11 +50,9 @@ PADRAO: dict[str, str] = {
     "consumer acceptance": "aceitação pelo consumidor", "consumer": "consumidor", "acceptability": "aceitabilidade", "bitterness": "amargor", "acidity": "acidez",
     "sweetness": "doçura", "astringency": "adstringência", "fruity": "frutado", "off-flavor": "defeito sensorial", "off-flavors": "defeitos sensoriais", "defects": "defeitos",
     "potato taste defect": "defeito de gosto de batata", "umami": "umami",
-    # origem e autenticidade
     "geographical origin": "origem geográfica", "geographic origin": "origem geográfica", "origin": "origem", "altitude": "altitude", "terroir": "terroir",
     "authentication": "autenticação", "authenticity": "autenticidade", "adulteration": "adulteração", "traceability": "rastreabilidade", "discrimination": "discriminação",
     "classification": "classificação", "fingerprinting": "impressão digital química", "chemical fingerprinting": "impressão digital química", "climate": "clima", "temperature": "temperatura",
-    # métodos
     "metabolomics": "metabolômica", "untargeted metabolomics": "metabolômica não direcionada", "metabolomic profiling": "perfil metabolômico", "metabolite profiling": "perfil de metabólitos",
     "metagenomics": "metagenômica", "multi-omics": "multiômica", "chemometrics": "quimiometria", "machine learning": "aprendizado de máquina", "artificial intelligence": "inteligência artificial",
     "electronic nose": "nariz eletrônico", "e-nose": "nariz eletrônico", "electronic tongue": "língua eletrônica", "e-tongue": "língua eletrônica", "gas chromatography": "cromatografia gasosa",
@@ -83,7 +79,8 @@ PADRAO: dict[str, str] = {
     "phenylalanine": "fenilalanina", "glutamic acid": "ácido glutâmico", "theobromine": "teobromina",
 }
 
-# Palavras vagas: nunca nomeiam eixos nem temas
+
+# Termos Excluídos
 VAGOS = {
     "process", "processes", "profile", "profiles", "compound", "compounds", "method", "methods", "analysis", "technique",
     "techniques", "approach", "sample", "samples", "treatment", "treatments", "result", "results", "study", "data", "model",
@@ -92,9 +89,13 @@ VAGOS = {
     "property", "properties", "component", "components", "difference", "differences", "type", "types", "group", "groups",
     "performance", "accuracy", "value", "values", "factor", "factors", "parameter", "parameters", "variable", "variables",
     "time", "times", "period", "stage", "stages", "condition", "number", "rate", "ratio", "score", "scores", "intensity",
+    "increase", "increases", "decrease", "decreases", "day", "days", "week", "weeks", "year", "years", "month", "months",
+    "use", "used", "using", "evidence", "impact", "role", "case", "cases", "review", "approach", "development", "analysis of",
+    "uso", "usos", "efeito", "efeitos", "estudo", "estudos", "dados", "resultado", "resultados", "análise", "método", "métodos",
+    "dia", "dias", "ano", "anos", "mês", "meses", "avaliação", "desempenho", "relação", "fatores", "fator", "impacto",
+    "estudio", "estudios", "efecto", "efectos", "datos", "resultado", "análisis", "método", "métodos", "uso",
 }
 
-# Termos de método/estatística: podem nomear um eixo (quando o eixo é sobre o método), mas não temas de resultados
 METODOLOGICOS = VAGOS | {
     "correlation analysis", "principal component analysis", "multivariate analysis", "chemometrics", "chemometric", "mass spectrometry",
     "gas chromatography", "gas chromatography-mass spectrometry", "headspace", "solid-phase microextraction", "olfactometry",
@@ -103,7 +104,6 @@ METODOLOGICOS = VAGOS | {
     "gc-ms", "gc–ms", "hs-spme", "gc-ims", "lc-ms", "uplc-ms", "gc-o", "gc×gc", "spme", "pca", "pls-da", "opls-da", "anova",
 }
 
-# Termos genéricos demais para nomear eixos ou temas (indexação automática do Scopus/WoS etc.)
 GENERICOS = {
     "article", "human", "humans", "nonhuman", "controlled study", "chemistry", "priority journal", "procedures", "metabolism", "analysis", "coffee", "coffea",
     "food", "foods", "beverage", "beverages", "female", "male", "adult", "animal", "animals", "unclassified drug", "drug effect", "comparative study", "plant seed",
@@ -117,6 +117,8 @@ GENERICOS = {
     "sensory evaluation", "smelling", "perception", "volatilization", "chemometrics", "metabolomics", "flavor compounds", "aroma compounds",
 }
 
+
+# Glossário do user
 def carregar(caminho: Path | None) -> dict[str, str]:
     glossario = dict(PADRAO)
     if caminho and caminho.exists():

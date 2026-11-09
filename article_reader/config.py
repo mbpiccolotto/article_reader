@@ -1,40 +1,41 @@
-"""Configuração central"""
+"""Configuração da Execução."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+
+
+# Constantes
+"""Versão do pacote e tipos de entrada aceitos."""
 
 VERSAO = "4.1"
 TIPOS = {"pdf": "PDF", "ris": "RIS", "md": "MD"}
 
 
-@dataclass #
+# Parâmetros
+"""Entrada, saída, títulos, glossário e opções."""
+@dataclass
 class Config:
-#input
-    tipo: str = "pdf"                         
-    pasta_entrada: Path = Path(".")          
-#output
+    tipo: str = "pdf"
+    pasta_entrada: Path = Path(".")
     nome_output: str = "resultados_leitura"
-    pasta_output: Path | None = None         
+    pasta_output: Path | None = None
     nome_documento: str = ""
-#artigos/leitura
     resultados: int = 4
     discussoes: int = 2
     conclusoes: int = 1
     min_palavras: int = 5
     max_palavras: int = 100
-    citacao: int = 40         
+    citacao: int = 40
     tabelas: bool = True
-    figuras: int = 20              
+    figuras: int = 20
     dpi_figuras: int = 300
     min_eixos: int = 2
     max_eixos: int = 10
     min_artigos: int = 2
     max_temas: int = 10
-#parâmetros
-    glossario: Path | None = None             
-    extras: dict = field(default_factory=dict)
+    glossario: Path | None = None
 
     @property
     def titulo(self) -> str:

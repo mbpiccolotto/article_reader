@@ -1,4 +1,4 @@
-"""Launch do Leitor"""
+"""Menu e verificação de dependências."""
 
 from __future__ import annotations
 
@@ -10,8 +10,9 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from .keyboard import getch
 
+
+# Verificação de dependências
 DEPENDENCIAS = {
     "pymupdf": "pymupdf>=1.26",
     "sklearn": "scikit-learn>=1.3",
@@ -20,7 +21,6 @@ DEPENDENCIAS = {
 }
 TIPOS = {"1": "pdf", "2": "ris", "3": "md"}
 NOMES = {"pdf": "PDF", "ris": "RIS", "md": "MD"}
-    
 
 def garantir_dependencias(dependencias: dict = DEPENDENCIAS, arquivo_req: str = "requirements.txt") -> None:
     faltando = [req for mod, req in dependencias.items() if importlib.util.find_spec(mod) is None]
@@ -37,6 +37,8 @@ def garantir_dependencias(dependencias: dict = DEPENDENCIAS, arquivo_req: str = 
         raise SystemExit("\nNão foi possível instalar: " + ", ".join(ainda or faltando)
                          + f"\nTente manualmente: {sys.executable} -m pip install " + " ".join(ainda or faltando))
 
+
+# Módulos
 MODULOS = [
     ("NumPy", "numpy"),
     ("scikit-learn", "sklearn.cluster"),
@@ -50,7 +52,7 @@ MODULOS = [
 
 def carregar_modulos() -> None:
     """Loading dos módulos."""
-    from .progress import BarraProgresso
+    from .progress_bar import BarraProgresso
 
     barra = BarraProgresso(len(MODULOS), "Carregando")
     for rotulo, modulo in MODULOS:
@@ -58,8 +60,10 @@ def carregar_modulos() -> None:
         barra.avancar(rotulo)
     barra.fim()
 
+
+# Seleção de leitura
 def escolher_pasta(tipo: str) -> Path | None:
-    """Escolha uma pasta para leitura."""
+    """Selecione a pasta de arquivos."""
     try:
         import tkinter
         from tkinter import filedialog
@@ -70,12 +74,12 @@ def escolher_pasta(tipo: str) -> Path | None:
         raiz.update()
         try:
             escolha = filedialog.askdirectory(parent=raiz, mustexist=True,
-                                              title=f"Envie sua pasta de arquivos {NOMES[tipo]}")
+                                              title=f"Selecione a pasta de arquivos {NOMES[tipo]}")
         finally:
             raiz.destroy()
         return Path(escolha) if escolha else None
     except Exception:
-        from .keyboard import ler_linha
+        from .console_input import ler_linha
 
         texto = ler_linha("Caminho da pasta (vazio = voltar ao início)").strip().strip('"')
         return Path(texto) if texto else None
@@ -87,6 +91,8 @@ def abrir_no_explorador(arquivo: Path) -> None:
         except OSError:
             pass
 
+
+# Leitura e Menu
 CABECALHO = """
 ================================================================
  Leitor de artigos {extra}
@@ -95,10 +101,10 @@ CABECALHO = """
 """
 
 def uma_leitura(nova: bool) -> None:
-    from . import progress as progresso
+    from . import progress_bar as progresso
     from .config import Config
-    from .grammar import pl
-    from .keyboard import CTRL_R, Monitor, NovaLeitura, escolher, getch, ler_linha
+    from .pluralization import pl
+    from .console_input import CTRL_R, Monitor, NovaLeitura, escolher, getch, ler_linha
     from .pipeline import executar, listar_arquivos
 
     print(CABECALHO.format(extra=" — NOVA LEITURA" if nova else ""))
@@ -150,7 +156,7 @@ def uma_leitura(nova: bool) -> None:
             raise NovaLeitura
 
 def interativo() -> None:
-    from .keyboard import NovaLeitura, preparar_console, restaurar_console, sair
+    from .console_input import NovaLeitura, preparar_console, restaurar_console, sair
 
     preparar_console()
     nova = False
@@ -171,6 +177,8 @@ def interativo() -> None:
     finally:
         restaurar_console()
 
+
+# Comando
 def main(argv: list[str] | None = None) -> int:
     for fluxo in (sys.stdout, sys.stderr):
         try:
@@ -182,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
         garantir_dependencias({"pandas": "pandas", "scipy": "scipy", "matplotlib": "matplotlib", "openpyxl": "openpyxl",
                                "xlsxwriter": "XlsxWriter", "PIL": "Pillow", "pymupdf": "pymupdf"},
                                "requirements.txt")
-        from .analysis import main as main_analises
+        from .meta_analysis import main as main_analises
 
         return main_analises(argv[1:])
 

@@ -1,4 +1,4 @@
-"""Leitura."""
+"""Leitura de PDF e Markdown."""
 
 from __future__ import annotations
 
@@ -9,8 +9,13 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import unquote
 
-from .files import abrir_pdf, existe, ler_texto
+from .file_io import abrir_pdf, existe, ler_texto
+
+
+# Constantes
+"""Expressões regulares."""
 
 RE_MARCA_PAGINA = re.compile(r"<!-- p\. (\d+) -->")
 _LIGADURAS_UNICODE = {"ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi", "ﬄ": "ffl", "ﬅ": "st", "ﬆ": "st"}
@@ -19,6 +24,7 @@ _RE_LEGENDA = re.compile(r"^\s*(fig(?:ure|\.)?|figura|table|tabela|quadro|scheme
                          re.IGNORECASE)
 
 
+# Resultados
 class ErroLeitura(RuntimeError):
     pass
 
@@ -41,16 +47,20 @@ class Leitura:
     tabelas: list[Tabela] = field(default_factory=list)
     ocr: bool = False
 
-# PDF
+
+# OCR
+_RE_PRODUTOR_OCR = re.compile(r"tesseract|ocrmypdf|abbyy|finereader|paper ?capture|omnipage|readiris|ocr", re.IGNORECASE)
+
 def _tem_camada_ocr(doc) -> bool:
-    """PDF cujo texto vem de OCR (fonte invisível 'GlyphLessFont' do Tesseract/OCRmyPDF)."""
+    meta = doc.metadata or {}
+    if _RE_PRODUTOR_OCR.search(" ".join(str(meta.get(k) or "") for k in ("producer", "creator"))):
+        return True
     for pagina in list(doc)[:3]:
         if any("GlyphLess" in (f[3] or "") for f in pagina.get_fonts()):
             return True
     return False
 
 def _texto_ocr(doc) -> list[str]:
-    """PDFs com OCR: remonta o texto pela posição das palavras, coluna por coluna."""
     paginas = []
     for pagina in doc:
         palavras = pagina.get_text("words")
@@ -88,9 +98,40 @@ def _linhas_em_paragrafos(palavras: list) -> str:
     paragrafos.append(atual)
     return "\n\n".join(p for p in paragrafos if p.strip())
 
+
+# Texto e Espaçamento
+_RE_COLADO = re.compile(r"[^\W\d_]{22,}")
+_FOLGA_ESPACO = 0.10
+
+def _texto_linha(linha: dict) -> str:
+    return "".join(s.get("text", "") for s in linha["spans"])
+
+def _refazer_espacos(linha: dict) -> None:
+    anterior = None
+    for trecho in linha["spans"]:
+        partes = []
+        for c in trecho["chars"]:
+            x0, _, x1, _ = c["bbox"]
+            if anterior and c["c"].strip() and anterior[1].strip() and x0 - anterior[0] > _FOLGA_ESPACO * trecho["size"]:
+                partes.append(" ")
+            partes.append(c["c"])
+            anterior = (x1, c["c"])
+        trecho["text"] = "".join(partes)
+
+def _blocos_da_pagina(pagina, flags) -> list[dict]:
+    blocos = [b for b in pagina.get_text("dict", flags=flags)["blocks"] if b.get("type") == 0]
+    if not any(_RE_COLADO.search(_texto_linha(l)) for b in blocos for l in b["lines"]):
+        return blocos
+    brutos = [b for b in pagina.get_text("rawdict", flags=flags)["blocks"] if b.get("type") == 0]
+    for bloco in brutos:
+        for linha in bloco["lines"]:
+            for trecho in linha["spans"]:
+                trecho["text"] = "".join(c["c"] for c in trecho["chars"])
+            if _RE_COLADO.search(_texto_linha(linha)):
+                _refazer_espacos(linha)
+    return brutos
+
 def _ordenar_colunas(blocos: list[dict], largura: float) -> list[dict]:
-    """Ordem de leitura: faixas separadas por blocos de largura total; em cada faixa,
-    a coluna da esquerda inteira e depois a da direita."""
     meio = largura / 2
     folga = largura * 0.03
 
@@ -115,6 +156,8 @@ def _ordenar_colunas(blocos: list[dict], largura: float) -> list[dict]:
     esvaziar()
     return ordenados
 
+
+# PDF
 def ler_pdf(pdf: Path, pasta_figuras: Path | None = None, *, extrair_tabelas: bool = True,
             max_figuras: int = 8, dpi_figuras: int = 150) -> Leitura:
     import pymupdf
@@ -145,7 +188,7 @@ def _ler_pdf_textual(doc, pdf, pasta_figuras, extrair_tabelas, max_figuras, dpi,
     tabelas: list[Tabela] = []
     for num, pagina in enumerate(doc, 1):
         caixas_tab = []
-        if extrair_tabelas and re.search(r"\b(tab(?:le|ela)|quadro)\s*S?\d", pagina.get_text("text"), re.IGNORECASE):
+        if extrair_tabelas and re.search(r"\b(tab(?:le|ela|\.)?|quadro)\s*S?\d", pagina.get_text("text"), re.IGNORECASE):
             try:
                 palavras = pagina.get_text("words")
                 for tab in pagina.find_tables().tables:
@@ -156,7 +199,7 @@ def _ler_pdf_textual(doc, pdf, pasta_figuras, extrair_tabelas, max_figuras, dpi,
                         tabelas.append(Tabela(num, dados))
             except Exception:  # noqa: BLE001 — detecção de tabela é opcional
                 pass
-        blocos = [b for b in pagina.get_text("dict", flags=flags)["blocks"] if b.get("type") == 0]
+        blocos = _blocos_da_pagina(pagina, flags)
         linhas = []
         for bloco in _ordenar_colunas(blocos, pagina.rect.width):
             for linha in bloco["lines"]:
@@ -166,11 +209,11 @@ def _ler_pdf_textual(doc, pdf, pasta_figuras, extrair_tabelas, max_figuras, dpi,
                 caixa = pymupdf.Rect(linha["bbox"])
                 if any(caixa.intersects(r) and (caixa & r).get_area() > 0.6 * max(caixa.get_area(), 1e-6) for r in caixas_tab):
                     continue
-                texto = "".join(s["text"] for s in spans).strip()
+                texto = re.sub(r"\s+", " ", "".join(s["text"] for s in linha["spans"])).strip()
                 tam = max(s["size"] for s in spans)
                 negrito = all((s["flags"] & 16) or "bold" in s["font"].lower() for s in spans)
                 linhas.append({"texto": texto, "tam": tam, "negrito": negrito, "bloco": bloco["number"],
-                               "y": caixa.y0, "y1": caixa.y1})
+                               "linhas_bloco": len(bloco["lines"]), "y": caixa.y0, "y1": caixa.y1})
                 tamanhos[round(tam, 1)] += len(texto)
                 ocorrencias[re.sub(r"\d+", "#", texto.lower())] += 1
         paginas.append(linhas)
@@ -201,14 +244,16 @@ def _ler_pdf_textual(doc, pdf, pasta_figuras, extrair_tabelas, max_figuras, dpi,
             if _RE_LEGENDA.match(txt):
                 legendas.append({"pagina": num, "legenda": txt, "y": ln["y"], "y1": ln["y1"]})
             titulo = (
-                len(txt) < 120 and not txt.endswith((".", ",", ";", ":")) and not _RE_LEGENDA.match(txt)
-                and (ln["tam"] >= corpo * 1.15 or (ln["negrito"] and len(txt) < 80
-                                                    and re.match(r"^(\d+(\.\d+)*\.?\s+)?[A-ZÀ-Ú]", txt)))
+                4 <= len(txt) < 120 and not txt.endswith((".", ",", ";", ":")) and not _RE_LEGENDA.match(txt)
+                and re.search(r"[^\W\d_]{3}", txt)
+                and (ln["tam"] >= corpo * 1.15
+                     or (ln["negrito"] and ln["linhas_bloco"] == 1 and len(txt) < 80
+                         and re.match(r"^(\d+(\.\d+)*\.?\s+)?[A-ZÀ-Ú]", txt)))
             )
             if titulo:
                 descarregar()
                 if saida and saida[-1].startswith("\n## ") and ln["bloco"] == bloco_ant:
-                    saida[-1] = saida[-1].rstrip("\n") + f" {txt}\n"  # título em mais de uma linha
+                    saida[-1] = saida[-1].rstrip("\n") + f" {txt}\n"
                 else:
                     saida.append(f"\n## {txt}\n")
             else:
@@ -218,7 +263,7 @@ def _ler_pdf_textual(doc, pdf, pasta_figuras, extrair_tabelas, max_figuras, dpi,
             bloco_ant = ln["bloco"]
         descarregar()
 
-    for t in tabelas:  # legenda da tabela: a legenda "Table N" mais próxima na mesma página
+    for t in tabelas:
         candidatas = [l for l in legendas if l["pagina"] == t.pagina and re.match(r"\s*(tab|quadro)", l["legenda"], re.I)]
         if candidatas:
             t.legenda = candidatas[0]["legenda"]
@@ -228,8 +273,9 @@ def _ler_pdf_textual(doc, pdf, pasta_figuras, extrair_tabelas, max_figuras, dpi,
     figuras = _extrair_figuras(doc, pdf, pasta_figuras, legendas, max_figuras, dpi)
     return Leitura(texto, figuras, tabelas)
 
+
+# Imagens e Tabelas
 def _texto_celula(caixa, palavras) -> str:
-    """Texto da célula a partir das palavras cujo centro cai dentro dela (evita quebras como '421 .')."""
     if not caixa:
         return ""
     x0, y0, x1, y1 = caixa
@@ -243,7 +289,6 @@ def _legenda_proxima(legendas, pagina, r) -> str:
     return min(candidatas, key=lambda l: min(abs(l["y"] - r.y1), abs(l["y1"] - r.y0)))["legenda"]
 
 def _extrair_figuras(doc, pdf, pasta, legendas, maximo, dpi) -> list[Figura]:
-    """Recorta as figuras da página (imagens e gráficos vetoriais) em JPEG compacto."""
     if not pasta or maximo <= 0:
         return []
     pasta = Path(pasta)
@@ -254,7 +299,7 @@ def _extrair_figuras(doc, pdf, pasta, legendas, maximo, dpi) -> list[Figura]:
         area = pagina.rect.get_area()
         regioes = []
         for info in pagina.get_images(full=True):
-            if uso_xref[info[0]] > 1:  # logotipos e marcas repetidas
+            if uso_xref[info[0]] > 1:
                 continue
             for r in pagina.get_image_rects(info[0]):
                 regioes.append(r)
@@ -285,15 +330,16 @@ def _seguro(nome: str) -> str:
     return re.sub(r"[^\w\-]+", "_", unicodedata.normalize("NFKD", nome).encode("ascii", "ignore").decode())
 
 
-# MD
+# Markdown
 def ler_md(md: Path) -> Leitura:
-    """Lê um .md existente (sem conversão). Imagens referenciadas entram nas fichas."""
-    texto = _normalizar_unicode(ler_texto(md, errors="replace"))
+    texto = _normalizar_unicode(ler_texto(md, encoding="utf-8-sig", errors="replace"))
     if "<!-- p. " not in texto:
         texto = "<!-- p. 1 -->\n" + texto
     figuras = []
-    for alt, alvo in re.findall(r"!\[([^\]]*)\]\(([^)\s]+)", texto):
-        arq = (md.parent / alvo)
+    for alt, alvo in re.findall(r"!\[([^\]]*)\]\(<?([^)>]+?)>?(?:\s+\"[^\"]*\")?\)", texto):
+        if re.match(r"[a-z][a-z0-9+.-]*://", alvo, re.IGNORECASE):
+            continue
+        arq = md.parent / unquote(alvo.strip())
         if existe(arq) and arq.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".bmp"):
             figuras.append(Figura(arq, 0, alt.strip()))
     return Leitura(texto, figuras[:8])
@@ -305,15 +351,20 @@ def _normalizar_unicode(texto: str) -> str:
     return unicodedata.normalize("NFC", texto)
 
 
+# Fixing
 _RE_PALAVRA = re.compile(r"[A-Za-z]{2,}")
-_PUA = "-"  # área de uso privado: algumas fontes põem ali os glifos de ligadura
+_PUA = "-"
 _RE_PALAVRA_PUA = re.compile(rf"[A-Za-z{_PUA}]*[{_PUA}][A-Za-z{_PUA}]*")
 
+class Vocabulario(Counter):
+    """Em quantos documentos cada palavra aparece (`n_docs` = tamanho do corpus)."""
+    n_docs: int = 0
 
-def frequencia_documental(textos: Iterable[str]) -> Counter:
-    df: Counter = Counter()
+def frequencia_documental(textos: Iterable[str]) -> Vocabulario:
+    df = Vocabulario()
     for texto in textos:
         df.update({p.lower() for p in _RE_PALAVRA.findall(re.sub(rf"[A-Za-z]*[{_PUA}][A-Za-z{_PUA}]*", " ", texto))})
+        df.n_docs += 1
     return df
 
 def reparar_ligaduras(texto: str, df: Counter, total_docs: int) -> tuple[str, Counter]:
@@ -359,22 +410,46 @@ def _reparar_pua(palavra: str, df: Counter) -> str:
             candidatos = [c + ins for c in candidatos for ins in ("fi", "fl", "ff", "ffi", "ffl", "ft", "")][:400]
         else:
             candidatos = [c + ch for c in candidatos]
-    melhor = max(candidatos, key=lambda c: (df.get(c.lower(), 0), -len(c)))
-    return melhor if df.get(melhor.lower(), 0) > 0 else re.sub(f"[{_PUA}]", "", palavra)
+    melhor = max(candidatos, key=lambda c: (df.get(c.lower(), 0) + (1000 if c.lower() in _LEXICO_LIGADURAS else 0), -len(c)))
+    conhecida = df.get(melhor.lower(), 0) > 0 or melhor.lower() in _LEXICO_LIGADURAS
+    return melhor if conhecida else re.sub(f"[{_PUA}]", "", palavra)
 
+# "Ligaduras"
+_LEXICO_LIGADURAS = frozenset("""
+coffee coffees effect effects effective effectively affect affected affects different differ differs difference differences
+differential differentiation efficient efficiency efficiently sufficient sufficiently insufficient office offset suffer
+buffer buffers staff stuff diffusion diffuse diffused diffuses afford affinity affiliation offer offered offers
+field fields find finding findings finds first final finally fine finer fingerprint fingerprints finish finished
+film films filter filtered filtering filters fibre fibres fiber fibers file files fill filled fit fitted fitting
+profile profiles profiling specific specifically specification classified classification identified identification
+quantified quantification certified modified modification verified justified simplified significant significantly
+significance fluid fluids flow flows flowing flavor flavors flavour flavours flavonoid flavonoids fluorescence fluorescent
+flat flame float floral flower flowers flush flux fluctuation fluctuations flexible flexibility conflict conflicts
+influence influenced influences inflammation inflammatory reflect reflects reflected reflection refine refined
+benefit benefits benefited confirm confirmed confirms conformation configuration definition definitions defined
+define defines sacrifice artifact artifacts after often soft softer left lift lifted shift shifted shifts craft
+fragrance fresh frequency frequencies fruity fully functional function functions further
+aflatoxin ester esters fructose glucose fluorescein fingerprinting
+café cafés eficiência eficiente diferença diferenças diferente diferentes efeito efeitos efetivo afetado afetados
+filtro filtros fluxo fluxos fino final finais fibra fibras perfil perfis específico específicos especificamente
+significativo significativa significativos classificação classificado identificação identificado quantificação
+influência refletir benefício benefícios confirmado confirmou definição definido flavonoide flavonoides sabor
+""".split())
 
 _CURTAS_QUEBRADAS = {"rst", "nal", "eld", "uid", "ber", "lms", "ows", "lm"}
-_PROTEGIDAS = {"oral", "orally", "ash", "ashes", "ashy", "ask", "asks", "asked", "lies", "lame", "owing", "ever", "ore", "ores"}
-
+_PROTEGIDAS = {"oral", "orally", "ash", "ashes", "ashy", "ask", "asks", "asked", "lies", "lame", "owing", "ever", "ore", "ores",
+               "oat", "oats", "lied", "perl", "pers", "ower", "lower", "lowers"}
 
 def _melhor_reparo(palavra: str, df: Counter, limite_raro: int) -> str | None:
     if (len(palavra) < 4 and palavra not in _CURTAS_QUEBRADAS) or palavra in _PROTEGIDAS:
+        return None
+    if palavra in _LEXICO_LIGADURAS:
         return None
     melhor, melhor_df = None, 0
     for i in range(len(palavra) + 1):
         for ins in _INSERCOES:
             candidata = palavra[:i] + ins + palavra[i:]
-            n = df.get(candidata, 0)
+            n = df.get(candidata, 0) + (1000 if candidata in _LEXICO_LIGADURAS else 0)
             if n > melhor_df:
                 melhor, melhor_df = candidata, n
     if melhor and melhor_df >= max(5, limite_raro, 3 * df[palavra]):
@@ -395,8 +470,9 @@ def reparar_corpus(textos: dict, textos_referencia: list[str], log=print) -> dic
             f"(ex.: {', '.join(list(trocas_total)[:5])}).")
     return novos
 
+
+# Validação
 def eh_sumario(texto: str) -> bool:
-    """Documento que só contém capa e sumário (ex.: anais de congresso)."""
     linhas = [l for l in texto.splitlines() if l.strip() and not l.startswith("<!--")]
     if not linhas:
         return True

@@ -1,26 +1,29 @@
-"""Redação da síntese."""
+"""Redação do resumo integralizado."""
 
 from __future__ import annotations
 
-import re
 from collections import Counter
 from dataclasses import dataclass, field
 from itertools import cycle
 
-from .findings import contar_tecnicas
+from .passage_selection import contar_tecnicas
 from .citations import citacao, citacao_narrativa, plural
 from .config import Config
-from .grammar import dos, pl, vb
+from .pluralization import dos, pl, vb
 
-ESTUDO = "estudo"  # constante: evita aspas aninhadas em f-string (Python < 3.12)
+
+# Blocos
+"""Blocos do documento e pequenos auxiliares de formatação."""
+
+ESTUDO = "estudo"
 from .models import Artigo, Frase
-from .themes import Eixo, Tema
+from .thematic_axes import Eixo, Tema
 
-IT_INI, IT_FIM = "\x01", "\x02"  # marcadores de itálico dentro do texto
+IT_INI, IT_FIM = "\x01", "\x02"
 
 @dataclass
 class Bloco:
-    tipo: str  # titulo1 | titulo2 | paragrafo | citacao_longa
+    tipo: str
     texto: str
 
 @dataclass
@@ -45,6 +48,7 @@ def _pct(n: int, total: int) -> str:
     return f"{round(100 * n / total)}%" if total else "0%"
 
 
+# Vocabulário
 VERBOS_RESULTADO = [("observa", "observam"), ("relata", "relatam"), ("constata", "constatam"), ("verifica", "verificam"),
                     ("demonstra", "demonstram"), ("registra", "registram"), ("evidencia", "evidenciam"), ("identifica", "identificam")]
 VERBOS_DISCUSSAO = [("argumenta", "argumentam"), ("sugere", "sugerem"), ("pondera", "ponderam"), ("propõe", "propõem"),
@@ -56,6 +60,9 @@ CONECTIVOS_DISCUSSAO = ["Ao interpretar seus resultados, ", "", "Nessa perspecti
 CONECTIVOS_CONCLUSAO = ["", "Em termos conclusivos, ", "Ao final de seu estudo, ", "Na mesma direção, ", "Como síntese de seus achados, "]
 
 
+# Redator
+"""Acumula frases, citações e trechos em parágrafos e blocos."""
+
 class Redator:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -65,7 +72,6 @@ class Redator:
         self._contador = 0
         self.usadas: set[tuple[str, int]] = set()
 
-    # ------------------------------------------------------------ montagem
     def titulo(self, texto: str, nivel: int = 1) -> None:
         self.fechar()
         self.doc.blocos.append(Bloco(f"titulo{nivel}", texto))
@@ -83,7 +89,6 @@ class Redator:
         return citacao(artigos)
 
     def citar_trecho(self, artigo: Artigo, frase: Frase, tipo: str, conector: str = "") -> None:
-        """Insere uma citação direta: curta no parágrafo, longa em bloco recuado."""
         self.doc.citados.add(artigo.chave)
         self.usadas.add((artigo.chave, frase.ordem))
         self.doc.trechos_usados += 1
@@ -98,7 +103,6 @@ class Redator:
             self.doc.blocos.append(Bloco("citacao_longa", trecho + "."))
             return
         if self._contador % 3 == 0 and conector and tipo == "resultado":
-            # alterna com a forma parentética para variar a construção
             impessoal = ("registra-se que", "verifica-se que", "observa-se que")[(self._contador // 3) % 3]
             self.frase(_maiuscula(f"{conector}{impessoal} “{trecho}” {citacao(artigo, frase.pagina)}."))
         else:
@@ -112,6 +116,10 @@ def _maiuscula(texto: str) -> str:
         if c.isalpha():
             return texto[:i] + c.upper() + texto[i + 1:]
     return texto
+
+
+# Seções
+"""Escreve a introdução, uma seção por eixo e as considerações finais."""
 
 def redigir(artigos: list[Artigo], eixos: list[Eixo], cfg: Config) -> Documento:
     r = Redator(cfg)
@@ -171,7 +179,6 @@ def _eixo(r: Redator, eixo: Eixo, n: int) -> None:
     artigos = eixo.artigos
     r.titulo(f"{n} {eixo.titulo}")
 
-    # ---- panorama
     r.titulo(f"{n}.1 Panorama dos estudos", 2)
     anos = sorted(int(a.metadados.ano) for a in artigos if a.metadados.ano.isdigit())
     publ = vb(len(artigos), "publicado", "publicados")
@@ -195,7 +202,6 @@ def _eixo(r: Redator, eixo: Eixo, n: int) -> None:
         r.frase(f"Na análise dos dados, recorrem com maior frequência a {lista([t for t, _ in estat])}.")
     r.fechar()
 
-    # ---- resultados organizados por temas
     r.titulo(f"{n}.2 Resultados", 2)
     for i, tema in enumerate(eixo.temas):
         _tema(r, tema, i)
@@ -213,7 +219,6 @@ def _eixo(r: Redator, eixo: Eixo, n: int) -> None:
             if (j + 1) % 4 == 0:
                 r.fechar()
         r.fechar()
-    # resultados adicionais (segundo melhor) de quem só apareceu uma vez, para equilibrar
     adicionais = []
     for a in artigos:
         livres = [f for f in a.resultados if not r.ja_usada(a, f)]
@@ -228,7 +233,6 @@ def _eixo(r: Redator, eixo: Eixo, n: int) -> None:
                 r.fechar()
         r.fechar()
 
-    # ---- interpretações e conclusões
     r.titulo(f"{n}.3 Interpretações e conclusões dos autores", 2)
     discussoes = [(a, next((f for f in a.discussoes if not r.ja_usada(a, f)), None)) for a in artigos]
     discussoes = [(a, f) for a, f in discussoes if f]
@@ -252,7 +256,6 @@ def _eixo(r: Redator, eixo: Eixo, n: int) -> None:
         r.fechar()
 
 def _tema(r: Redator, tema: Tema, indice: int) -> None:
-    """Um tema comum a vários estudos: abertura + trechos de cada estudo, em ordem cronológica."""
     artigos = [a for a, _ in tema.trechos]
     rotulo = _rotulo_tema(tema)
     grupo = r.citar_grupo(artigos)

@@ -1,15 +1,15 @@
-"""Modelo de dados para o pipeline."""
+"""Modelo de dados."""
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 
 
+# Classes
 @dataclass
 class Autor:
     sobrenome: str
     prenomes: str = ""
-
 
 @dataclass
 class Metadados:
@@ -24,7 +24,7 @@ class Metadados:
     doi: str = ""
     palavras_chave: list[str] = field(default_factory=list)
     resumo: str = ""
-    fonte: str = ""  # ris | crossref | pdf
+    fonte: str = ""
 
     @property
     def paginas(self) -> str:
@@ -32,31 +32,26 @@ class Metadados:
             return f"{self.pagina_inicial}-{self.pagina_final}"
         return self.pagina_inicial
 
-
 @dataclass
 class Frase:
-    texto: str            
-    pagina: int           
-    categoria: str        
-    secao: str            
-    ordem: int            
+    texto: str
+    pagina: int
+    categoria: str
+    secao: str
+    ordem: int
     pontuacao: float = 0.0
-    sentido: str = ""     
-
+    sentido: str = ""
 
 @dataclass
 class Artigo:
     arquivo: str
-    arquivo_md: str
     metadados: Metadados
     categorias_encontradas: list[str] = field(default_factory=list)
     resultados: list[Frase] = field(default_factory=list)
     discussoes: list[Frase] = field(default_factory=list)
     conclusoes: list[Frase] = field(default_factory=list)
-    limitacoes: list[Frase] = field(default_factory=list)
     candidatas: list[Frase] = field(default_factory=list)
     tecnicas: list[str] = field(default_factory=list)
-    texto_tematico: str = ""
     alertas: list[str] = field(default_factory=list)
     chave: str = ""
     sufixo_ano: str = ""

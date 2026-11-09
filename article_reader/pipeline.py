@@ -14,36 +14,36 @@ from datetime import datetime
 from pathlib import Path
 
 from . import glossary as glossario_mod
-from .findings import detectar_tecnicas, selecionar_trechos
-from .files import ler_bytes, ler_texto, listar_recursivo
+from .passage_selection import detectar_tecnicas, selecionar_trechos
+from .file_io import ler_bytes, ler_texto, listar_recursivo
 from .citations import atribuir_chaves
 from .config import TIPOS, VERSAO, Config
-from .document import gerar_docx, gerar_ficha_relatorio
-from .reader import ErroLeitura, Leitura, duracao, eh_sumario, frequencia_documental, ler_md, ler_pdf, reparar_corpus
-from .metadata import associar_ris, dois_no_texto, ler_ris, metadados_do_texto, normalizar
+from .docx_builder import gerar_docx, gerar_ficha_relatorio
+from .document_reader import ErroLeitura, Leitura, duracao, eh_sumario, frequencia_documental, ler_md, ler_pdf, reparar_corpus
+from .metadata import (associar_ris, dois_no_texto, ler_ris, metadados_do_texto, normalizar, textos_parecidos,
+                       titulo_do_arquivo, titulos_de_cabecalho)
 from .models import Artigo, Metadados
-from .grammar import pl, vb
-from .progress import BarraProgresso, Carregando
-from .writing import redigir
-from .sections import FraseBruta, dividir_frases, ler_markdown
-from .themes import construir_eixos
+from .pluralization import pl, vb
+from .progress_bar import BarraProgresso, Carregando
+from .summary_writer import redigir
+from .section_parser import FraseBruta, dividir_frases, ler_markdown
+from .thematic_axes import construir_eixos
 
+
+# Reconhecimento
+"""Encontra os arquivos de entrada e cria nomes e caminhos de saída."""
 
 EXTENSOES = {"pdf": (".pdf",), "ris": (".ris", ".txt"), "md": (".md", ".markdown")}
-
 
 def log(msg: str) -> None:
     print(msg, flush=True)
 
-
 INACESSIVEIS: list[str] = []
 
-
 def listar_arquivos(pasta: Path, tipo: str) -> list[Path]:
-    """Arquivos do tipo, em todas as subpastas (inclusive com caminho > 260 caracteres no Windows)."""
     arquivos, inacessiveis = listar_recursivo(pasta, EXTENSOES[tipo])
-    INACESSIVEIS[:] = inacessiveis
-    if tipo == "ris":  # .txt só conta se for exportação RIS
+    INACESSIVEIS.extend(p for p in inacessiveis if p not in INACESSIVEIS)
+    if tipo == "ris":
         arquivos = [p for p in arquivos if p.suffix.lower() == ".ris" or _parece_ris(p)]
     return arquivos
 
@@ -71,7 +71,7 @@ def pasta_downloads() -> Path:
 
             guid = GUID(0x374DE290, 0x123F, 0x4565, (ctypes.c_ubyte * 8)(0x91, 0x64, 0x39, 0xC4, 0x92, 0x5E, 0x46, 0x7B))
             caminho = ctypes.c_wchar_p()
-            if ctypes.windll.shell32.SHGetKnownFolderPath(...) == 0:
+            if ctypes.windll.shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(caminho)) == 0:
                 valor = caminho.value
                 ctypes.windll.ole32.CoTaskMemFree(caminho)
                 if valor:
@@ -94,10 +94,13 @@ def caminho_livre(destino: Path) -> Path:
     return destino
 
 
-# Execute
+# Caminho Principal
+"""Executa as cinco etapas: leitura, seleção, eixos, redação do resumo e documentos."""
+
 def executar(cfg: Config) -> Path:
     inicio = time.time()
     tipo = cfg.tipo
+    INACESSIVEIS.clear()
     arquivos = listar_arquivos(cfg.pasta_entrada, tipo)
     if not arquivos:
         raise RuntimeError(f"Nenhum arquivo {TIPOS[tipo]} encontrado em {cfg.pasta_entrada}.")
@@ -201,7 +204,9 @@ def contar_situacoes(situacao: dict[str, str]) -> Counter:
     return c
 
 
-# PDF e MD
+# Output
+"""Transforma os textos lidos em objetos Artigo."""
+
 def _artigos_de_textos(arquivos: list[Path], cfg: Config, trabalho: Path):
     falhas: list[str] = []
     situacao: dict[str, str] = {}
@@ -212,7 +217,6 @@ def _artigos_de_textos(arquivos: list[Path], cfg: Config, trabalho: Path):
     if registros:
         log(f"  RIS na pasta: {pl(len(registros), 'registro', 'registros')} (usados como metadados das referências).")
 
-    # 1)
     por_hash: dict[str, str] = {}
     barra = BarraProgresso(len(arquivos), "Lendo")
     for i, arq in enumerate(arquivos):
@@ -252,9 +256,8 @@ def _artigos_de_textos(arquivos: list[Path], cfg: Config, trabalho: Path):
     vocabulario = frequencia_documental(list(textos.values()) + [r.titulo + " " + r.resumo for r in registros])
     inicios = {n: "\n".join(txt.splitlines()[:250]) for n, txt in textos.items()}
     associacoes = associar_ris(inicios, registros) if registros else {}
-    
+    cabecalhos = titulos_de_cabecalho({n: t for n, t in inicios.items() if n not in associacoes})
 
-    # 2) Metadados 
     candidatos: list[tuple[str, Metadados, list[str]]] = []
     for nome, texto in sorted(textos.items()):
         if eh_sumario(texto):
@@ -267,12 +270,11 @@ def _artigos_de_textos(arquivos: list[Path], cfg: Config, trabalho: Path):
             if confianca < 0.95:
                 alertas.append(f"Registro RIS associado pelo título (similaridade {confianca:.0%}); confira.")
         else:
-            meta = metadados_do_texto(inicios[nome], nome)
+            meta = metadados_do_texto(inicios[nome], nome, cabecalhos)
             alertas.append("Sem registro RIS correspondente: título obtido do texto/nome do arquivo; "
                            "autores, ano e periódico ausentes (a citação ficará incompleta).")
         candidatos.append((nome, meta, alertas))
 
-    # 3)
     grupos: dict[str, list[int]] = {}
     motivo: dict[int, str] = {}
     sem_doi: list[int] = []
@@ -289,16 +291,29 @@ def _artigos_de_textos(arquivos: list[Path], cfg: Config, trabalho: Path):
             por_titulo.setdefault(titulo, set()).add(chave)
     for i in sem_doi:
         nome, meta, _ = candidatos[i]
-        destino = next((d for d in dois_no_texto(inicios[nome])[:6] if d in grupos), None)
+        cabecalho = "\n".join(inicios[nome].splitlines()[:60])
+        dois_cabecalho = dois_no_texto(cabecalho)
+        destino = next((d for d in dois_cabecalho[:6] if d in grupos), None)
         motivo[i] = "mesmo DOI no texto"
         if destino is None:
             titulo = normalizar(meta.titulo)
+            if titulo == normalizar(titulo_do_arquivo(nome)) or titulo in cabecalhos:
+                titulo = ""
             alvos = por_titulo.get(titulo, set()) if len(titulo) >= 25 else set()
             if len(alvos) == 1:
                 destino = next(iter(alvos))
+                motivo[i] = "mesmo título"
+            elif dois_cabecalho:
+                # O primeiro DOI do cabeçalho é o do próprio artigo: arquivos com DOIs diferentes nunca são duplicatas,
+                # mesmo que o título extraído do texto coincida (cabeçalho de periódico, título dividido em linhas).
+                destino = f"doi:{dois_cabecalho[0]}"
+            elif len(titulo) >= 25 and not alvos:
+                destino = f"titulo:{titulo}"
+                if not all(textos_parecidos(textos[nome], textos[candidatos[j][0]]) for j in grupos.get(destino, [])):
+                    destino = f"arquivo:{nome}"
+                motivo[i] = "mesmo título"
             else:
-                destino = f"titulo:{titulo}" if len(titulo) >= 25 and not alvos else f"arquivo:{nome}"
-            motivo[i] = "mesmo título"
+                destino = f"arquivo:{nome}"
         grupos.setdefault(destino, []).append(i)
     manter: set[int] = set()
     for indices in grupos.values():
@@ -309,7 +324,6 @@ def _artigos_de_textos(arquivos: list[Path], cfg: Config, trabalho: Path):
                 situacao[candidatos[i][0]] = (f"duplicata de {candidatos[melhor][0]} "
                                               f"({motivo.get(i, 'mesmo artigo')}; mantida a melhor cópia)")
 
-    # 4)
     artigos: list[Artigo] = []
     barra = BarraProgresso(len(manter), "Analisando")
     for i in sorted(manter):
@@ -317,7 +331,7 @@ def _artigos_de_textos(arquivos: list[Path], cfg: Config, trabalho: Path):
         barra.avancar(nome)
         texto = textos[nome]
         frases, categorias = ler_markdown(texto)
-        artigo = Artigo(arquivo=nome, arquivo_md="", metadados=meta, categorias_encontradas=categorias, alertas=alertas)
+        artigo = Artigo(arquivo=nome, metadados=meta, categorias_encontradas=categorias, alertas=alertas)
         artigo.deslocamento_pagina = _deslocamento(meta, texto)
         if ocr[nome]:
             artigo.alertas.append("Texto obtido por OCR: confira a grafia das citações no PDF.")
@@ -326,11 +340,15 @@ def _artigos_de_textos(arquivos: list[Path], cfg: Config, trabalho: Path):
         artigo.tecnicas = detectar_tecnicas(" ".join([meta.titulo, meta.resumo, " ".join(meta.palavras_chave), metodos]))
         artigos.append(artigo)
         situacao[nome] = "analisado" + (f" ({len(artigo.alertas)} {vb(len(artigo.alertas), 'alerta', 'alertas')})" if artigo.alertas else "")
-    trechos = sum(len(a.resultados) + len(a.discussoes) + len(a.conclusoes) + len(a.limitacoes) for a in artigos)
+    trechos = sum(len(a.resultados) + len(a.discussoes) + len(a.conclusoes) for a in artigos)
     com_alerta = sum(1 for a in artigos if a.alertas)
     barra.fim(f"{pl(len(artigos), 'artigo analisado', 'artigos analisados')}; {pl(trechos, 'trecho selecionado', 'trechos selecionados')}; "
               f"{com_alerta} com {vb(com_alerta, 'alerta', 'alertas')}.")
     return artigos, falhas, leituras, situacao
+
+
+# Registro RIS
+"""Monta artigos a partir de registros RIS."""
 
 def _deslocamento(meta: Metadados, texto: str) -> int:
     try:
@@ -342,8 +360,6 @@ def _deslocamento(meta: Metadados, texto: str) -> int:
         return inicial - 1
     return 0
 
-
-# RIS
 def _ler_registros(arquivos_ris: list[Path], duplicados: list | None = None) -> list[Metadados]:
     registros, vistos = [], set()
     for arq in arquivos_ris:
@@ -392,7 +408,7 @@ def _artigos_de_ris(arquivos: list[Path], cfg: Config):
         for k, s in enumerate(sentencas):
             categoria = "conclusao" if k >= len(sentencas) - 2 else "resultados_discussao"
             frases.append(FraseBruta(s, 0, categoria, "Resumo", k, False))
-        artigo = Artigo(arquivo=nome_reg, arquivo_md="", metadados=meta,
+        artigo = Artigo(arquivo=nome_reg, metadados=meta,
                         categorias_encontradas=["resultados_discussao", "conclusao"],
                         alertas=["Leitura baseada apenas no resumo (registro RIS, sem texto integral)."])
         selecionar_trechos(artigo, frases, cfg, vocabulario)

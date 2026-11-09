@@ -1,4 +1,4 @@
-"""Funcionalidades no CMD. Os '#type: ignore' são para o mypy, que são para Linux."""
+"""Funcionalidades de console e pyright."""
 from __future__ import annotations
 
 import os
@@ -6,9 +6,10 @@ import sys
 import threading
 import time
 
+
+# Funcionalidades de console
 CTRL_C, CTRL_R = "\x03", "\x12"
 WINDOWS = os.name == "nt"
-
 
 class NovaLeitura(Exception):
     """Ctrl+R: abandona a leitura atual e volta ao menu."""
@@ -20,9 +21,8 @@ def sair(codigo: int = 0, mensagem: str = "\nEncerrado (Ctrl+C).") -> None:
     os._exit(codigo)
 
 
-# Console do Windows (cmd)
+# CMD
 _modo_original = None
-
 def preparar_console() -> None:
     global _modo_original
     if not WINDOWS:
@@ -36,12 +36,12 @@ def preparar_console() -> None:
         k32.GetStdHandle.restype = wintypes.HANDLE
         k32.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
         k32.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-        h = k32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+        h = k32.GetStdHandle(-10)
         modo = wintypes.DWORD()
         if k32.GetConsoleMode(h, ctypes.byref(modo)):
             _modo_original = modo.value
-            k32.SetConsoleMode(h, modo.value & ~0x0001)  # desliga ENABLE_PROCESSED_INPUT
-        os.system("")  # sequências ANSI (barra de progresso) no cmd antigo
+            k32.SetConsoleMode(h, modo.value & ~0x0001)
+        os.system("")
     except Exception:  # noqa: BLE001
         pass
 
@@ -59,8 +59,6 @@ def restaurar_console() -> None:
         except Exception:  # noqa: BLE001
             pass
 
-
-# Leitura de teclado
 def _getch_posix() -> str:
     import termios
     import tty
@@ -73,8 +71,9 @@ def _getch_posix() -> str:
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, antigo) #type: ignore
 
+
+# Keyboard input
 def getch() -> str:
-    """Uma tecla, sem eco. Trata Ctrl+C (encerra) e devolve Ctrl+R como CTRL_R."""
     if not sys.stdin.isatty():
         ch = sys.stdin.read(1)
         if ch == "":
@@ -83,7 +82,7 @@ def getch() -> str:
         import msvcrt
 
         ch = msvcrt.getwch()
-        if ch in ("\x00", "\xe0"):  # teclas de função/setas: descarta o segundo código
+        if ch in ("\x00", "\xe0"):
             msvcrt.getwch()
             return ""
     else:
@@ -93,7 +92,6 @@ def getch() -> str:
     return ch
 
 def escolher(opcoes: str) -> str:
-    """Espera uma das teclas em ``opcoes``. Ctrl+R levanta NovaLeitura."""
     while True:
         ch = getch()
         if ch == CTRL_R:
@@ -131,9 +129,8 @@ def ler_linha(prompt: str, padrao: str = "") -> str:
             print(ch, end="", flush=True)
 
 
-# Visual (monitor/tela)
+# Monitor (Tela)
 class Monitor:
-
     def __init__(self):
         self.pedido_nova = threading.Event()
         self._parar = threading.Event()
@@ -166,7 +163,7 @@ class Monitor:
                         sair()
                     if ch == CTRL_R:
                         self.pedido_nova.set()
-                        print("\n  Ctrl+R: Relaunching...", flush=True)
+                        print("\n  Ctrl+R: interrompendo para uma nova leitura...", flush=True)
                 else:
                     time.sleep(0.05)
             return

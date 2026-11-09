@@ -1,4 +1,4 @@
-"""Citações (ABNT NBR 10520:2023). Referências (ABNT NBR 6023:2018)."""
+"""ABNT NBR 10520:2023 e ABNT NBR 6023:2018."""
 
 from __future__ import annotations
 
@@ -9,13 +9,15 @@ from string import ascii_lowercase
 
 from .models import Artigo, Autor
 
+
+# Nomes Autores
 _PARTICULAS = {"de", "da", "do", "das", "dos", "e", "van", "von", "der", "den", "del", "della", "la", "le", "di", "du"}
 
 def _ascii(texto: str) -> str:
     return unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode()
 
 def nome_em_texto(sobrenome: str) -> str:
-    """'SILVA FILHO' -> 'Silva Filho'; mantém grafias mistas ('McDonald', 'van Dijk')."""
+    """'SILVA FILHO' -> 'Silva Filho'; mantém grafias mistas."""
     if not sobrenome.isupper() and not sobrenome.islower():
         return sobrenome
     partes = []
@@ -32,6 +34,8 @@ def iniciais(prenomes: str) -> str:
         saida.append("-".join(f"{p[0].upper()}." for p in partes))
     return " ".join(saida)
 
+
+# Autor/Ano
 def atribuir_chaves(artigos: list[Artigo]) -> None:
     usadas: set[str] = set()
     for artigo in sorted(artigos, key=lambda a: (a.metadados.titulo.lower(), a.arquivo)):
@@ -98,6 +102,8 @@ def plural(artigo: Artigo) -> bool:
 def pagina_citada(artigo: Artigo, pagina_pdf: int) -> int:
     return pagina_pdf + artigo.deslocamento_pagina
 
+
+# Citações
 def citacao(artigos: list[Artigo] | Artigo, pagina: int | None = None) -> str:
     """(Silva, 2020); (Silva, 2020, p. 7); (Costa et al., 2019a, 2019b; Souza; Lima, 2021)."""
     if isinstance(artigos, Artigo):
@@ -123,6 +129,8 @@ def _autor_referencia(autor: Autor) -> str:
     ini = iniciais(autor.prenomes)
     return f"{autor.sobrenome.upper()}, {ini}" if ini else autor.sobrenome.upper()
 
+
+# Referencial
 def referencia_abnt(artigo: Artigo) -> list[tuple[str, bool]]:
     """Referência como trechos (texto, negrito); o título do periódico vai em negrito."""
     meta = artigo.metadados

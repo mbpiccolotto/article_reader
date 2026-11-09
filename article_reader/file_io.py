@@ -1,15 +1,17 @@
-"""Acesso aos arquivos."""
+"""Acesso a arquivos."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
+
+# Acesso e Path
 def caminho_so(caminho: Path | str) -> str:
     texto = os.path.abspath(str(caminho))
     if os.name != "nt" or texto.startswith("\\\\?\\"):
         return texto
-    if texto.startswith("\\\\"):  # compartilhamento de rede: \\servidor\pasta
+    if texto.startswith("\\\\"):
         return "\\\\?\\UNC\\" + texto[2:]
     return "\\\\?\\" + texto
 
@@ -23,10 +25,6 @@ def ler_bytes(caminho: Path | str) -> bytes:
 def ler_texto(caminho: Path | str, encoding: str = "utf-8", errors: str = "strict") -> str:
     with open(caminho_so(caminho), encoding=encoding, errors=errors) as f:
         return f.read()
-
-def ler_primeira_linha(caminho: Path | str) -> str:
-    with open(caminho_so(caminho), encoding="utf-8", errors="replace") as f:
-        return f.readline()
 
 def gravar_texto(caminho: Path | str, texto: str) -> None:
     os.makedirs(caminho_so(Path(caminho).parent), exist_ok=True)
@@ -45,13 +43,9 @@ def sem_prefixo(texto: str) -> str:
         return texto[4:]
     return texto
 
-def listar_recursivo(pasta: Path | str, extensoes: tuple[str, ...]) -> tuple[list[Path], list[str]]:
-    """Todos os arquivos com as extensões dadas, em qualquer nível de subpasta.
 
-    Usa o prefixo de caminho longo do Windows: arquivos cujo caminho completo passa de 260
-    caracteres (comum no OneDrive com títulos de artigo como nome) NÃO são ignorados, como
-    acontecia com Path.rglob()/is_file(). Devolve também as pastas que não puderam ser abertas.
-    """
+# Listagem de arquivos
+def listar_recursivo(pasta: Path | str, extensoes: tuple[str, ...]) -> tuple[list[Path], list[str]]:
     encontrados: list[Path] = []
     inacessiveis: list[str] = []
     for raiz, pastas, arquivos in os.walk(caminho_so(pasta), onerror=lambda e: inacessiveis.append(sem_prefixo(str(e.filename)))):

@@ -1,4 +1,4 @@
-"""Seleção dos trechos de cada artigo."""
+"""Seleção dos trechos."""
 
 from __future__ import annotations
 
@@ -8,9 +8,14 @@ from collections import Counter
 
 from .config import Config
 from .models import Artigo, Frase
-from .sections import FraseBruta
+from .section_parser import FraseBruta
+
+
+# "Pistas"
+"""Expressões regulares."""
 
 _I = re.IGNORECASE
+MIN_DOCS_VOCABULARIO = 20
 
 PISTAS_RESULTADO = re.compile(
     r"\b(show(?:ed|n|s)?|reveal(?:ed|s)?|indicat(?:ed|es)|increas(?:ed|es|ing)?|decreas(?:ed|es|ing)?|"
@@ -35,15 +40,6 @@ PISTAS_CONCLUSAO = re.compile(
     r"(?:these|our|the present) (?:results|findings|data) (?:demonstrate|show|indicate|suggest|highlight|provide|confirm)|"
     r"this (?:study|work|research) (?:demonstrates|demonstrated|shows|showed|provides|highlights|confirms|revealed|reveals)|"
     r"em conclusão|conclui-se|en conclusión)\b",
-    _I,
-)
-PISTAS_LIMITACAO = re.compile(
-    r"\b(limitation|limited (?:by|to|number|sample|data)|further (?:stud|research|investigation|work|analys|validation|exploration)|"
-    r"future (?:stud|research|work|investigation)|should be (?:investigated|explored|further|evaluated|validated|confirmed|considered)|"
-    r"remains? (?:unclear|unknown|to be)|need(?:s|ed)? to be (?:further|investigated|confirmed|validated|explored|clarified)|"
-    r"warrant|not (?:been )?(?:assessed|evaluated|investigated|considered|addressed)|small sample|"
-    r"single (?:origin|harvest|season|batch|cultivar|variety)|is needed|are needed|"
-    r"limita[çc][ãa]o|estudos futuros|investigaciones futuras)",
     _I,
 )
 PISTAS_METODO = re.compile(
@@ -83,9 +79,10 @@ RE_RUIDO = re.compile(
     r"copyright|©|received|accepted|published|available online|e-mail|doi:|https?://)",
     _I,
 )
-RE_AUMENTO = re.compile(r"\b(increas\w*|higher|enhanc\w*|greater|more abundant|elevated|ros[ea]|improv\w*|rais\w*|aument\w*|maior\w*)\b", _I)
-RE_REDUCAO = re.compile(r"\b(decreas\w*|lower|reduc\w*|declin\w*|diminish\w*|less abundant|dropp\w*|loss|lost|diminu\w*|menor\w*)\b", _I)
 
+
+# Auxiliares
+"""Palavras de conteúdo, radicais e similaridade."""
 
 STOP = set(
     """a an the and or of to in on for with by from as at is are was were be been being this that these those it its
@@ -93,7 +90,6 @@ STOP = set(
     less least very can could may might will would should our we they he she them his her not no nor only same so too
     using used use based study studies results result data showed show shown found well however therefore thus while""".split()
 )
-
 
 def palavras_conteudo(texto: str) -> set[str]:
     return {_raiz(p) for p in re.findall(r"[a-zA-Zà-ÿ][a-zA-Zà-ÿ0-9\-]{3,}", texto.lower()) if p not in STOP}
@@ -109,32 +105,26 @@ def similaridade(a: set[str], b: set[str]) -> float:
         return 0.0
     return len(a & b) / math.sqrt(len(a) * len(b))
 
-def sentido(texto: str) -> str:
-    sobe, desce = bool(RE_AUMENTO.search(texto)), bool(RE_REDUCAO.search(texto))
-    if sobe and not desce:
-        return "aumento"
-    if desce and not sobe:
-        return "reducao"
-    return ""
 
+# Verificação
+"""Rejeita frases corrompidas ou incompletas."""
 
 _CURTAS_COMUNS = {"a", "an", "as", "at", "be", "by", "do", "if", "in", "is", "it", "no", "of", "on", "or", "so", "to", "up", "we",
                   "vs", "ph", "mg", "ml", "ng", "nm", "mm", "cm", "kg", "μg", "µg", "min", "h", "g", "l", "s", "e", "y", "o", "de", "la",
                   "el", "en", "se", "da", "do", "em", "os", "un", "al", "lo", "ii", "iv", "vi", "cv", "var", "sp", "ca", "et", "i", "n", "p"}
 _RE_ABREV_MEIO = re.compile(r"\b(?:al|vs|approx|ca|var|cv|spp?|fig|figs|eq|ref|resp|min|max|no)\. [a-z]", re.IGNORECASE)
 
-
 def parece_corrompida(texto: str, df: Counter | None = None, tf_doc: Counter | None = None) -> bool:
     """Detecta texto embaralhado (colunas misturadas, OCR ruim, codificação quebrada)."""
     if re.search(r"[\ufffd\u25a1\ue000-\uf8ff]|Â", texto):
         return True
     if sum(1 for c in texto if "\u1100" <= c <= "\u9fff" or "\uac00" <= c <= "\ud7af") > 3:
-        return True  # trechos em coreano/chinês/japonês
+        return True
     if texto.count("(") != texto.count(")") or texto.count("[") != texto.count("]"):
         return True
-    if re.search(r"\b[a-z]{3,}[A-Z][a-z]{2,}", texto):           # "precurAuthor"
+    if re.search(r"\b[a-z]{3,}[A-Z][a-z]{2,}", texto):
         return True
-    if re.search(r"\b[a-z]{3,}\. [a-z]{3,}\b", texto) and not _RE_ABREV_MEIO.search(texto):  # "study. quality"
+    if re.search(r"\b[a-z]{3,}\. [a-z]{3,}\b", texto) and not _RE_ABREV_MEIO.search(texto):
         return True
     if re.search(r"[!|]|—-|_ ", texto):
         return True
@@ -142,9 +132,8 @@ def parece_corrompida(texto: str, df: Counter | None = None, tf_doc: Counter | N
     estranhos = [t for t in tokens if len(t) == 2 and t.islower() and t not in _CURTAS_COMUNS]
     if len(estranhos) >= 2:
         return True
-    if df is not None and tokens:
+    if df is not None and tokens and getattr(df, "n_docs", 0) >= MIN_DOCS_VOCABULARIO:
         longas = [t for t in tokens if len(t) >= 4 and not re.search(r"[A-Z].*[A-Z]", t)]
-        # desconhecida = só existe neste artigo E aparece uma única vez nele (fragmento de OCR/colunas)
         desconhecidas = [t for t in longas if df.get(t.lower(), 0) <= 1 and (tf_doc is None or tf_doc[t.lower()] <= 1)]
         if longas and len(desconhecidas) / len(longas) > 0.15:
             return True
@@ -162,14 +151,18 @@ def frase_valida(f: FraseBruta, cfg: Config, df: Counter | None = None, tf_doc: 
     if RE_RUIDO.search(texto) or "|" in texto or "http" in texto:
         return False
     if not re.search(r"[.!?]['\"”’)]*$", texto):
-        return False  # frase truncada (quebra de coluna/tabela)
+        return False
     digitos = sum(c.isdigit() for c in texto)
     if digitos / max(len(texto), 1) > 0.18 or len(re.findall(r"\d+(?:[.,]\d+)?", texto)) > 10:
-        return False  # linha de tabela
+        return False
     if re.search(r"\b(Fig(?:ure)?\.?|Table)\s*S\d", texto):
-        return False  # material suplementar, inacessível ao leitor
+        return False
     letras = sum(c.isalpha() for c in texto)
     return letras / max(len(texto), 1) > 0.55
+
+
+# Pontuação
+"""Pontua as frases por seção e pistas."""
 
 def _pontuar(f: FraseBruta, resumo: set[str]) -> dict[str, float]:
     t = f.texto
@@ -190,7 +183,6 @@ def _pontuar(f: FraseBruta, resumo: set[str]) -> dict[str, float]:
     }
 
 def _escolher(candidatas: list[tuple[float, FraseBruta]], k: int, usadas: set[int]) -> list[tuple[float, FraseBruta]]:
-    """Melhores k frases, evitando repetidas e quase-duplicadas (diversidade)."""
     escolhidas: list[tuple[float, FraseBruta]] = []
     for pontos, f in sorted(candidatas, key=lambda x: -x[0]):
         if len(escolhidas) >= k:
@@ -205,7 +197,7 @@ def _escolher(candidatas: list[tuple[float, FraseBruta]], k: int, usadas: set[in
     return escolhidas
 
 def _para_frase(pontos: float, f: FraseBruta) -> Frase:
-    return Frase(f.texto, f.pagina, f.categoria, f.secao, f.ordem, round(pontos, 3), sentido(f.texto))
+    return Frase(f.texto, f.pagina, f.categoria, f.secao, f.ordem, round(pontos, 3))
 
 def selecionar_trechos(artigo: Artigo, frases: list[FraseBruta], cfg: Config, df: Counter | None = None) -> None:
     resumo = palavras_conteudo(artigo.metadados.resumo + " " + artigo.metadados.titulo)
@@ -241,7 +233,6 @@ def selecionar_trechos(artigo: Artigo, frases: list[FraseBruta], cfg: Config, df
         return [f for f in validas if f.categoria in cats_alvo]
 
     usadas: set[int] = set()
-    artigo.limitacoes = []
 
     conc_cand = entre(cat_conc)
     if not tem_conclusao:
@@ -264,6 +255,7 @@ def selecionar_trechos(artigo: Artigo, frases: list[FraseBruta], cfg: Config, df
         artigo.alertas.append("Nenhuma conclusão selecionada automaticamente.")
 
 
+# Detecção
 TECNICAS: dict[str, list[tuple[str, str]]] = {
     "analitica": [
         ("GC×GC", r"GC\s?[×x]\s?GC|(?i:comprehensive two-dimensional gas chromatography)"),
@@ -303,7 +295,6 @@ TECNICAS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 _TECNICAS_RE = {grupo: [(rot, re.compile(p)) for rot, p in itens] for grupo, itens in TECNICAS.items()}
-
 
 def detectar_tecnicas(texto: str) -> list[str]:
     encontradas = []

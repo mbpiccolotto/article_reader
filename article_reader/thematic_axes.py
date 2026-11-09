@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.decomposition import TruncatedSVD
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import normalize
 
@@ -17,16 +17,15 @@ from .config import Config
 from .glossary import GENERICOS, METODOLOGICOS, VAGOS
 from .models import Artigo, Frase
 
+
+# Modelos
+"""Dataclasses de temas e eixos."""
+
 @dataclass
 class Tema:
-    termo: str
     rotulo: str
     traduzido: bool
     trechos: list[tuple[Artigo, Frase]] = field(default_factory=list)
-
-    @property
-    def sentidos(self) -> set[str]:
-        return {f.sentido for _, f in self.trechos if f.sentido}
 
 @dataclass
 class Eixo:
@@ -35,6 +34,8 @@ class Eixo:
     artigos: list[Artigo]
     temas: list[Tema] = field(default_factory=list)
 
+
+# Tratamento
 def normalizar_termo(termo: str) -> str:
     termo = re.sub(r"\s+", " ", termo.lower().strip())
     termo = termo.replace("flavour", "flavor").replace("odour", "odor")
@@ -43,7 +44,7 @@ def normalizar_termo(termo: str) -> str:
 def singular(termo: str) -> str:
     palavras = termo.split()
     ultima = palavras[-1]
-    if re.search(r"[-–][a-z]{1,3}$|\d", ultima):  # siglas como "gc-ms", "hs-spme"
+    if re.search(r"[-–][a-z]{1,3}$|\d", ultima):
         return termo
     if len(ultima) > 4 and ultima.endswith("ies"):
         ultima = ultima[:-3] + "y"
@@ -71,6 +72,10 @@ def traduzir(termo: str, glossario: dict[str, str]) -> tuple[str, bool]:
 def _palavras_chave(artigo: Artigo) -> set[str]:
     return {singular(normalizar_termo(k)) for k in artigo.metadados.palavras_chave if 2 < len(k) < 60}
 
+
+# Group
+"""Agrupa os artigos."""
+
 def construir_eixos(artigos: list[Artigo], cfg: Config, glossario: dict[str, str], log=print) -> list[Eixo]:
     if len(artigos) < max(2 * cfg.min_artigos, 6):
         eixo = Eixo("Resultados dos estudos incluídos", [], list(artigos))
@@ -82,21 +87,22 @@ def construir_eixos(artigos: list[Artigo], cfg: Config, glossario: dict[str, str
         sublinear_tf=True, token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z0-9\-]{2,}\b",
     )
     X = vetorizador.fit_transform(textos)
-    # LSA: reduz o vocabulário a ~20 dimensões latentes; separa melhor temas em corpora homogêneos
-    dims = max(2, min(20, len(artigos) - 1, X.shape[1] - 1))
+    n_termos = len(vetorizador.get_feature_names_out())
+    dims = max(2, min(20, len(artigos) - 1, n_termos - 1))
     Z = normalize(TruncatedSVD(dims, random_state=0).fit_transform(X))
 
     k_max = max(cfg.min_eixos, min(cfg.max_eixos, len(artigos) // cfg.min_eixos))
     melhor = None
     for k in range(cfg.min_eixos, k_max + 1):
-        modelo = KMeans(n_clusters=k, n_init=50, random_state=0).fit(Z)
-        if len(set(modelo.labels_)) < 2:
+        modelo = KMeans(n_clusters=k, n_init=50, random_state=0).fit(Z)  # pyright: ignore[reportArgumentType]
+        etiquetas = np.asarray(modelo.labels_)
+        if len(set(etiquetas.tolist())) < 2:
             continue
-        nota = silhouette_score(Z, modelo.labels_, metric="cosine")
-        tamanhos = sorted(Counter(modelo.labels_.tolist()).values(), reverse=True)
+        nota = silhouette_score(Z, etiquetas, metric="cosine")
+        tamanhos = sorted(Counter(etiquetas.tolist()).values(), reverse=True)
         log(f"    k = {k}: silhueta = {nota:.3f}; tamanhos = {tamanhos}")
         if melhor is None or nota > melhor[0]:
-            melhor = (nota, k, modelo.labels_.copy())
+            melhor = (nota, k, etiquetas.copy())
     rotulos = melhor[2] if melhor else np.zeros(len(artigos), dtype=int)
     rotulos = _fundir_pequenos(Z, rotulos, cfg.min_artigos)
 
@@ -105,7 +111,7 @@ def construir_eixos(artigos: list[Artigo], cfg: Config, glossario: dict[str, str
     for grupo in sorted(set(rotulos), key=lambda g: -int((rotulos == g).sum())):
         membros = [a for a, r in zip(artigos, rotulos) if r == grupo]
         termos = _rotular(membros, artigos, df_corpus, X, rotulos == grupo, vetorizador, glossario)
-        rotulos_pt = list(dict.fromkeys(traduzir(t, glossario)[0] for t in termos))  # "e-nose" e "electronic nose" -> um só
+        rotulos_pt = list(dict.fromkeys(traduzir(t, glossario)[0] for t in termos))
         titulo = _juntar(rotulos_pt) if rotulos_pt else f"Grupo temático {len(eixos) + 1}"
         eixo = Eixo(titulo[0].upper() + titulo[1:], termos, sorted(membros, key=lambda a: (a.metadados.ano, a.chave)))
         eixo.temas = construir_temas(eixo, artigos, cfg, glossario)
@@ -113,7 +119,6 @@ def construir_eixos(artigos: list[Artigo], cfg: Config, glossario: dict[str, str
     return eixos
 
 def _texto_tematico(a: Artigo) -> str:
-    """O que o estudo investigou: título (peso 3), resumo e palavras-chave; sem resumo, usa os achados."""
     m = a.metadados
     partes = [m.titulo] * 3 + [m.resumo] + ["; ".join(m.palavras_chave)]
     if len(m.resumo.split()) < 50:
@@ -134,6 +139,15 @@ def _fundir_pequenos(Z, rotulos: np.ndarray, minimo: int) -> np.ndarray:
             v = Z[i]
             rotulos[i] = max(outros, key=lambda o: float(v @ centros[o]) / (np.linalg.norm(centros[o]) + 1e-9))
 
+
+# Eixos
+_FUNCIONAIS = set(ENGLISH_STOP_WORDS) | set(
+    """com sem para por pelo pela pelos pelas entre sobre sob após antes durante desde até como mais menos muito pouco
+    uma uns umas dos das nos nas num numa aos às nao não sua seu suas seus este esta estes estas esse essa isso
+    con sin para por entre sobre bajo tras ante durante desde hasta como más menos muy poco una unos unas los las del
+    sus este esta estos estas ese esa eso""".split()
+)
+
 def _rotular(membros, todos, df_corpus, X, mascara, vetorizador, glossario) -> list[str]:
     n_in, n_out = len(membros), max(len(todos) - len(membros), 1)
     textos_in = [(a.metadados.titulo + " " + a.metadados.resumo) for a in membros]
@@ -141,14 +155,14 @@ def _rotular(membros, todos, df_corpus, X, mascara, vetorizador, glossario) -> l
     dentro = Counter(t for a in membros for t in _palavras_chave(a))
     for termo in glossario:
         t = singular(normalizar_termo(termo))
-        dentro.setdefault(t, 2)  # termos do glossário entram como candidatos (verificados no texto abaixo)
+        dentro.setdefault(t, 2)
     pontuados = []
     for termo, c in dentro.items():
         if c < 2 or termo in GENERICOS or termo in VAGOS or df_corpus[termo] > 0.4 * len(todos):
             continue
         padrao = padrao_termo(termo)
         no_texto = sum(1 for t in textos_in if padrao.search(t))
-        if no_texto < 2:  # descarta termos de indexação automática que não aparecem no texto
+        if no_texto < 2:
             continue
         if sum(1 for t in textos_todos if padrao.search(t)) > 0.5 * len(todos):
             continue
@@ -169,12 +183,12 @@ def _rotular(membros, todos, df_corpus, X, mascara, vetorizador, glossario) -> l
         traducoes.add(rotulo)
         if len(escolhidos) == 3:
             break
-    if not escolhidos:  # nenhum termo reconhecível: termos TF-IDF mais característicos do grupo
+    if not escolhidos:
         centro = np.asarray(X[mascara].mean(axis=0)).ravel() - np.asarray(X[~mascara].mean(axis=0)).ravel()
         nomes = vetorizador.get_feature_names_out()
         for i in np.argsort(-centro)[:30]:
             termo = nomes[i]
-            if termo in GENERICOS or termo in VAGOS or any(termo in e or e in termo for e in escolhidos):
+            if termo in GENERICOS or termo in VAGOS or termo in _FUNCIONAIS or any(termo in e or e in termo for e in escolhidos):
                 continue
             escolhidos.append(termo)
             if len(escolhidos) == 2:
@@ -185,8 +199,8 @@ def _juntar(itens: list[str]) -> str:
     return itens[0] if len(itens) == 1 else ", ".join(itens[:-1]) + " e " + itens[-1]
 
 
+# Extração de Temas
 _COBERTURA_CORPUS: dict[tuple[int, str], int] = {}
-
 
 def _artigos_com_termo(termo: str, todos: list[Artigo]) -> int:
     chave = (id(todos), termo)
@@ -216,7 +230,7 @@ def construir_temas(eixo: Eixo, todos: list[Artigo], cfg: Config, glossario: dic
         for a in eixo.artigos:
             for f in a.resultados + a.candidatas + a.conclusoes:
                 if padrao.search(f.texto):
-                    achados.setdefault(a.chave, f)  # listas já ordenadas por relevância
+                    achados.setdefault(a.chave, f)
                     break
         if len(achados) >= 2 and (len(todos) < 10 or _artigos_com_termo(termo, todos) <= 0.35 * len(todos)):
             cobertura[termo] = achados
@@ -234,11 +248,11 @@ def construir_temas(eixo: Eixo, todos: list[Artigo], cfg: Config, glossario: dic
         if ganho(termo)[0] < 2 and temas:
             break
         achados = cobertura.pop(termo)
-        for outro in list(cobertura):  # evita temas quase iguais ("pyrazine" e "alkylpyrazine")
+        for outro in list(cobertura):
             if termo in outro or outro in termo:
                 cobertura.pop(outro)
         rotulo, traduzido = traduzir(termo, glossario)
-        tema = Tema(termo, rotulo, traduzido)
+        tema = Tema(rotulo, traduzido)
         for chave, frase in sorted(achados.items(), key=lambda kv: (por_chave[kv[0]].metadados.ano, kv[0])):
             if (chave, frase.ordem) in usadas:
                 continue

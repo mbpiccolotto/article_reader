@@ -1,4 +1,4 @@
-"""Barra de progresso (apenas visual)"""
+"""Loading em Barra de Progresso."""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ import shutil
 import sys
 import time
 
+
+# Barra
 VERIFICAR = None
 
 def _duracao(segundos: float) -> str:
@@ -13,7 +15,6 @@ def _duracao(segundos: float) -> str:
     m, s = divmod(segundos, 60)
     h, m = divmod(m, 60)
     return f"{h}h{m:02d}min" if h else f"{m}min{s:02d}s"
-
 
 class BarraProgresso:
     def __init__(self, total: int, titulo: str, largura: int = 30):
@@ -78,6 +79,7 @@ class BarraProgresso:
         sys.stdout.flush()
 
 
+# Animação de Loading
 class Carregando:
     def __init__(self, titulo: str, largura: int = 30):
         import threading

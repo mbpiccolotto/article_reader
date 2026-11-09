@@ -1,4 +1,4 @@
-"""Análise dos artigos."""
+"""Análises reprodutíveis da revisão sistemática"""
 
 from __future__ import annotations
 
@@ -24,18 +24,20 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib import font_manager  
-from PIL import Image, ImageDraw, ImageFont 
+from matplotlib import font_manager
+from PIL import Image, ImageDraw, ImageFont
 from scipy import stats
-import matplotlib.pyplot as plt
 import matplotlib.ticker
 import matplotlib.colors
 
+
+# Constantes
 LOGGER = logging.getLogger("revisao")
 SEMENTE = 20261030
 Image.MAX_IMAGE_PIXELS = None
 
 
+# Estrutura da Análise
 ESQUEMA_PADRAO: dict = {
     "versao_esquema": "1.0",
     "campos_estudo": {
@@ -59,10 +61,10 @@ ESQUEMA_PADRAO: dict = {
         "condutividade": {"rotulo": "Condutividade elétrica", "dimensao": "condutividade"},
         "umidade": {"rotulo": "Umidade", "dimensao": "fracao"},
     },
-  
+
     "variaveis_ensaio_criticas": ["valor", "unidade", "dp", "ep", "ic_inferior", "ic_superior", "n"],
     "variaveis_estudo_criticas": ["ano", "pais", "desenho_estudo", "matriz", "tecnica", "n_amostral"],
-  
+
     "agrupamentos_desfecho": {
         "eficiencia_remocao": ["remocao", "removal", "eficiencia", "efficiency", "degradacao", "degradation"],
         "toxicidade": ["toxic", "ec50", "lc50", "ic50", "mortalidade", "mortality", "viabilidade", "viability"],
@@ -94,8 +96,8 @@ ESQUEMA_PADRAO: dict = {
     },
     "dimensoes_mapa_evidencias": ["agrupamento_desfecho", "matriz_harm"],
     "criterios_metanalise": {
-        "k_minimo": 3,             
-        "exigir_dispersao": True,   
+        "k_minimo": 3,
+        "exigir_dispersao": True,
         "exigir_n": True,
         "exigir_unidade_comum": True,
         "exigir_mesmo_tipo_medida": True,
@@ -109,9 +111,7 @@ ESQUEMA_PADRAO: dict = {
     "figuras": {"dpi": 600, "formato_extra": "tiff", "largura_max_celula_painel_px": 3600},
 }
 
-
 def carregar_esquema(caminho: str | Path | None = None) -> dict:
-    """Mescla o esquema do usuário (JSON) sobre o padrão."""
     esquema = copy.deepcopy(ESQUEMA_PADRAO)
     if caminho:
         usuario = json.loads(Path(caminho).read_text(encoding="utf-8"))
@@ -130,6 +130,9 @@ def salvar_esquema_modelo(caminho: str | Path) -> Path:
     return caminho
 
 
+# Reading
+"""Transforma campos de texto"""
+
 _AUSENTES = {
     "", "na", "n/a", "nr", "n.r.", "nan", "none", "null", "-", "—", "–", "?",
     "nao relatado", "não relatado", "not reported", "nao informado", "não informado",
@@ -141,7 +144,6 @@ _NAO_DETECTADO = re.compile(
     re.IGNORECASE,
 )
 _NUM = r"[-+]?\d+(?:[.,]\d+)*(?:\s*[x×]\s*10\s*\^?\s*[-+]?\d+|[eE][-+]?\d+)?"
-
 
 def sem_acento(texto) -> str:
     texto = "" if texto is None else str(texto)
@@ -181,18 +183,14 @@ def _para_float(token: str) -> tuple[float | None, list[str]]:
         return None, flags + ["numero_nao_interpretavel"]
 
 def interpretar_valor(texto) -> dict:
-    """Converte um campo bruto em componentes numéricos sem perder o original.
+    """Converte um campo bruto em componentes numéricos."""
 
-    Reconhece: valor pontual, intervalo (a–b), média ± dispersão, censurado (<, >),
-    não detectado, ausente e notação científica; vírgula decimal é aceita.
-    """
     res = {"central": np.nan, "minimo": np.nan, "maximo": np.nan, "dispersao_pm": np.nan,
            "tipo": "ausente", "qualificador": "", "texto_residual": "", "flags": []}
     if _vazio(texto):
         return res
     bruto = str(texto).strip()
     s = bruto.replace("\u2212", "-").replace("\u00a0", " ")
-    # rótulos antes do número: "n = 12", "pH: 7,0", "T=25 °C"
     s = re.sub(r"^\s*[A-Za-zÀ-ú_ ]{1,15}\s*[=:]\s*(?=[-+<>≤≥~≈]?\s*\d)", "", s)
     if _NAO_DETECTADO.match(s.strip()):
         res.update(tipo="nao_detectado", qualificador="ND")
@@ -243,6 +241,7 @@ def para_inteiro(texto) -> float:
     return float(round(v)) if v is not None and not pd.isna(v) else np.nan
 
 
+# Conersão Unidades
 _UNIDADES = {
     "": ("", "adimensional", 1.0, 0.0),
     "°c": ("°C", "temperatura", 1.0, 0.0), "c": ("°C", "temperatura", 1.0, 0.0),
@@ -275,7 +274,6 @@ UNIDADE_ALVO = {
 }
 _AVISO_UNIDADE = {"ppm": "ppm≈mg/L (assume meio aquoso)", "ppb": "ppb≈µg/L (assume meio aquoso)"}
 
-
 def chave_unidade(unidade) -> str:
     if _vazio(unidade):
         return ""
@@ -287,7 +285,6 @@ def chave_unidade(unidade) -> str:
     return s
 
 def converter_unidade(valor: float, unidade_bruta, dimensao_esperada: str | None = None, *, dispersao=False):
-    """Retorna (valor_convertido, unidade_alvo, unidade_canonica, flags)."""
     flags = []
     chave = chave_unidade(unidade_bruta)
     info = _UNIDADES.get(chave)
@@ -323,12 +320,14 @@ def classificar_por_palavras(texto, mapa: dict[str, list[str]], padrao="nao_mape
     return achados[0], flags
 
 
+# Modelo
+"""Cria a planilha de extração em branco e lê as planilhas preenchidas como texto."""
+
 COLUNAS_DESFECHO = [
     "id_estudo", "desfecho", "grupo", "comparador", "tempo_medicao", "tipo_medida", "valor",
     "unidade", "dp", "ep", "ic_inferior", "ic_superior", "n", "direcao_efeito", "pagina",
     "trecho_evidencia", "fonte_extracao", "revisado_por",
 ]
-
 
 def colunas_estudo(esquema: dict) -> list[str]:
     cols = ["id_estudo", "arquivo_pdf"] + list(esquema["campos_estudo"])
@@ -338,7 +337,6 @@ def colunas_estudo(esquema: dict) -> list[str]:
 
 def criar_modelo_extracao(caminho: str | Path, esquema: dict, estudos: list[dict] | None = None,
                           desfechos: list[dict] | None = None, falhas: list[dict] | None = None) -> Path:
-    """Cria (ou preenche) a planilha de extração bruta. Tudo é gravado como texto."""
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
@@ -355,7 +353,6 @@ def criar_modelo_extracao(caminho: str | Path, esquema: dict, estudos: list[dict
             c.font, c.fill = cab, fundo
             c.alignment = Alignment(wrap_text=True, vertical="top")
         for linha in linhas or []:
-            # preserva marcadores brutos (NR, ND, "-") — só None/NaN viram célula vazia
             ws.append(["" if linha.get(c) is None or (isinstance(linha.get(c), float) and np.isnan(linha.get(c)))
                        else str(linha.get(c)) for c in colunas])
         for i, col in enumerate(colunas, 1):
@@ -387,7 +384,6 @@ def criar_modelo_extracao(caminho: str | Path, esquema: dict, estudos: list[dict
     return caminho
 
 def ler_extracao(caminho: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Lê as abas brutas como texto e atribui identificadores estáveis de linha."""
     estudos = pd.read_excel(caminho, sheet_name="estudos", dtype=str, engine="openpyxl").fillna("")
     desfechos = pd.read_excel(caminho, sheet_name="desfechos", dtype=str, engine="openpyxl").fillna("")
     estudos = estudos[estudos["id_estudo"].str.strip() != ""].reset_index(drop=True)
@@ -402,6 +398,8 @@ def ler_extracao(caminho: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]:
         LOGGER.warning("Desfechos sem estudo correspondente: %s", orfaos)
     return estudos, desfechos
 
+
+# Harmonização (Visual)
 def harmonizar_estudos(estudos_brutos: pd.DataFrame, esquema: dict) -> pd.DataFrame:
     df = estudos_brutos.copy()
     flags_por_linha: list[list[str]] = [[] for _ in range(len(df))]
@@ -467,7 +465,7 @@ def harmonizar_estudos(estudos_brutos: pd.DataFrame, esquema: dict) -> pd.DataFr
                 b = converter_unidade(r["maximo"], u, dim)[0]
                 d = converter_unidade(r["dispersao_pm"], u, dim, dispersao=True)[0]
             if any(f.startswith(("dimensao_incompativel", "unidade_nao_reconhecida")) for f in flc):
-                c = a = b = d = np.nan  # não mistura unidades incompatíveis na coluna harmonizada
+                c = a = b = d = np.nan
             cent.append(c); mn.append(a); mx.append(b); pm.append(d); un.append(alvo); tipo.append(r["tipo"])
             flags_por_linha[i] += fl + [f"{var}:{f}" for f in flc]
         df[f"{var}_central"], df[f"{var}_min"], df[f"{var}_max"] = cent, mn, mx
@@ -478,7 +476,6 @@ def harmonizar_estudos(estudos_brutos: pd.DataFrame, esquema: dict) -> pd.DataFr
     return df
 
 def _derivar_dp(dp, ep, ic_inf, ic_sup, n) -> tuple[float, str]:
-    """DP relatado ou derivado (Cochrane Handbook, seção 6.5.2.2)."""
     if not pd.isna(dp):
         return dp, "relatado"
     if not pd.isna(ep) and not pd.isna(n) and n > 0:
@@ -552,9 +549,11 @@ def harmonizar_desfechos(desfechos_brutos: pd.DataFrame, esquema: dict) -> pd.Da
     return pd.concat([df.reset_index(drop=True), pd.DataFrame(linhas)], axis=1)
 
 
+# Revisão Manual (Flags/Alertas)
+"""Lista os itens que pedem revisão manual."""
+
 _FLAGS_PARA_REVISAO = ("nao_interpretavel", "ambigua", "nao_reconhecida", "incompativel", "nao_classificado",
                        "nao_mapeado", "multiplas_categorias", "pm_assumido", "unidade_ausente", "inferida")
-
 
 def listar_pendencias(estudos_h: pd.DataFrame, desfechos_h: pd.DataFrame) -> pd.DataFrame:
     pend = []
@@ -646,6 +645,8 @@ def aplicar_correcoes(estudos_h, desfechos_h, caminho_correcoes) -> tuple[pd.Dat
 def colunas_brutas_protegidas() -> list[str]:
     return COLUNAS_DESFECHO + [str(k) for k in ESQUEMA_PADRAO["campos_estudo"]] + ["id_estudo", "id_linha"]
 
+
+# Estatística
 def auditoria_faltantes(estudos_h, desfechos_h, esquema) -> tuple[pd.DataFrame, pd.DataFrame]:
     linhas = []
     est = estudos_h[~estudos_h["excluido"]]
@@ -676,7 +677,6 @@ def auditoria_faltantes(estudos_h, desfechos_h, esquema) -> tuple[pd.DataFrame, 
             sem = des.groupby("id_estudo")[r["variavel"]].apply(lambda s: s.map(_vazio).all())
         aud.loc[i, "n_estudos_afetados"] = int(sem.sum())
 
-    # matriz estudo × variável (1 = presente) para a figura
     mat = pd.DataFrame(index=est["id_estudo"])
     for v in esquema["variaveis_estudo_criticas"]:
         if v in est:
@@ -780,6 +780,10 @@ def mapa_evidencias(estudos_h, desfechos_h, esquema) -> tuple[pd.DataFrame, pd.D
     matriz = base.pivot_table(index=d1, columns=d2, values="id_estudo", aggfunc="nunique", fill_value=0)
     return lista, matriz
 
+
+# Meta-análise e Associação
+"""Verifica quais grupos podem ser combinados e testa associações."""
+
 def prontidao_metanalise(estudos_h, desfechos_h, esquema) -> tuple[pd.DataFrame, str]:
     crit = esquema["criterios_metanalise"]
     des = desfechos_h[~desfechos_h["excluido"]].merge(
@@ -866,8 +870,7 @@ def _bh(pvals: pd.Series) -> pd.Series:
     return pd.Series(adj, index=pvals.index)
 
 def associacoes_exploratorias(estudos_h, desfechos_h, esquema) -> pd.DataFrame:
-    """Spearman (preditores numéricos) e Kruskal–Wallis/Mann–Whitney (categóricos),
-    com a mediana do desfecho por estudo, na unidade predominante de cada agrupamento."""
+    """Spearman (preditores numéricos) e Kruskal–Wallis/Mann–Whitney (categóricos), com a mediana do desfecho por estudo, na unidade predominante de cada agrupamento."""
     cfg = esquema["associacoes"]
     est = estudos_h[~estudos_h["excluido"]]
     des = desfechos_h[~desfechos_h["excluido"]]
@@ -925,6 +928,7 @@ def associacoes_exploratorias(estudos_h, desfechos_h, esquema) -> pd.DataFrame:
     return tab.round(5)
 
 
+# Qualidade Metodológi
 CHECKLISTS_JBI: dict[str, list[dict]] = {
     "transversal_analitico": [
         {"id": "Q1", "pergunta": "Os critérios de inclusão da amostra foram claramente definidos?",
@@ -989,7 +993,6 @@ CHECKLISTS_JBI: dict[str, list[dict]] = {
     ],
 }
 
-
 def extrair_paginas_pymupdf(caminho_pdf: str | Path) -> list[str]:
     import pymupdf
 
@@ -999,7 +1002,7 @@ def extrair_paginas_pymupdf(caminho_pdf: str | Path) -> list[str]:
         return [pagina.get_text("text") for pagina in doc] #type: ignore
 
 def _antes_das_referencias(paginas: list[str]) -> list[str]:
-    """Remove a lista de referências para não confundir evidência metodológica."""
+    """Remove a lista de referências."""
     corte = None
     for i, txt in enumerate(paginas):
         if re.search(r"^\s*(references|refer[êe]ncias|bibliography|literature cited)\s*$", txt,
@@ -1142,14 +1145,16 @@ def pontuar_qualidade(caminho_avaliacao: str | Path, esquema: dict) -> tuple[pd.
                            "qualidade": cat})
     return av, pd.DataFrame(por_estudo), concord
 
+
+# Imagens
+"""Matplot."""
+
 def _estilo():
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 9, "axes.spines.top": False,
                          "axes.spines.right": False, "axes.titlesize": 10, "axes.titleweight": "bold",
                          "savefig.bbox": "tight", "figure.dpi": 100})
 
-
-COR = "#132243"
-
+COR = "#00133B"
 
 def _salvar(fig, caminho_base: Path, esquema) -> Path:
     dpi = esquema["figuras"]["dpi"]
@@ -1278,7 +1283,6 @@ def gerar_figuras(pasta: Path, estudos_h, desfechos_h, matriz_mapa, matriz_falta
     return figs
 
 def montar_painel(imagens: list[Path], destino: Path, esquema, ncol=2) -> Path:
-    """Monta figuras em painel único rotulado (A, B, C...) com Pillow, preservando o DPI."""
     dpi = esquema["figuras"]["dpi"]
     larg_max = esquema["figuras"]["largura_max_celula_painel_px"]
     ims = []
@@ -1309,6 +1313,8 @@ def montar_painel(imagens: list[Path], destino: Path, esquema, ncol=2) -> Path:
         painel.save(destino.with_suffix(".tiff"), dpi=(dpi, dpi), compression="tiff_lzw")
     return destino
 
+
+# Excel
 def exportar_excel(abas: dict[str, pd.DataFrame], caminho: Path, index_abas: set[str] | frozenset[str] = frozenset()) -> Path:
     caminho.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(caminho, engine="xlsxwriter") as wr:
@@ -1337,9 +1343,11 @@ def exportar_excel(abas: dict[str, pd.DataFrame], caminho: Path, index_abas: set
     return caminho
 
 
+# Registros
+"""Versões de software, hashes de arquivos, log, manifesto e texto de disponibilidade de dados."""
+
 PACOTES_REGISTRADOS = ["pandas", "numpy", "scipy", "matplotlib", "openpyxl", "XlsxWriter", "PyMuPDF",
                        "Pillow", "pypdf"]
-
 
 def versoes_software() -> dict:
     v = {"python": sys.version.split()[0], "plataforma": platform.platform()}
@@ -1420,6 +1428,8 @@ def texto_disponibilidade(versoes: dict, n_estudos: int, n_resultados: int, repo
         f"{repositorio}.\n"
     )
 
+
+# Execute
 def executar_analises(caminho_extracao: str | Path, pasta_saida: str | Path, *, esquema: dict,
                       caminho_correcoes: str | Path | None = None,
                       caminho_qualidade: str | Path | None = None,
@@ -1434,7 +1444,6 @@ def executar_analises(caminho_extracao: str | Path, pasta_saida: str | Path, *, 
     LOGGER.info("Início da análise | extração=%s", caminho_extracao)
     entradas = [caminho_extracao]
 
-    # 1) dados brutos: cópia intocada + hash
     copia = pastas["01_dados_brutos"] / caminho_extracao.name
     shutil.copy2(caminho_extracao, copia)
     LOGGER.info("Cópia bruta preservada (sha256=%s)", sha256(copia))
@@ -1444,7 +1453,6 @@ def executar_analises(caminho_extracao: str | Path, pasta_saida: str | Path, *, 
     est_b, des_b = ler_extracao(caminho_extracao)
     LOGGER.info("Lidos %d estudos e %d resultados brutos", len(est_b), len(des_b))
 
-    # 2) harmonização
     est_h = harmonizar_estudos(est_b, esquema)
     des_h = harmonizar_desfechos(des_b, esquema)
     log_corr = pd.DataFrame()
@@ -1456,7 +1464,6 @@ def executar_analises(caminho_extracao: str | Path, pasta_saida: str | Path, *, 
     est_h.to_csv(pastas["02_harmonizados"] / "tabela_estudos_harmonizada.csv", index=False, encoding="utf-8-sig")
     des_h.to_csv(pastas["02_harmonizados"] / "tabela_desfechos_formato_longo.csv", index=False, encoding="utf-8-sig")
 
-    # 3) revisão manual
     pend = listar_pendencias(est_h, des_h)
     pend["status_revisao"] = "pendente"
     if caminho_correcoes:
@@ -1471,7 +1478,6 @@ def executar_analises(caminho_extracao: str | Path, pasta_saida: str | Path, *, 
     LOGGER.info("Pendências para revisão manual: %d (%d ainda pendentes)", len(pend),
                 int((pend["status_revisao"] == "pendente").sum()))
 
-    # 4) análises
     aud, mat_falt = auditoria_faltantes(est_h, des_h, esquema)
     desc_cat, desc_num = descritivas(est_h, des_h, esquema)
     fq = resumo_fisicoquimico(est_h, esquema)
@@ -1481,7 +1487,6 @@ def executar_analises(caminho_extracao: str | Path, pasta_saida: str | Path, *, 
     assoc = associacoes_exploratorias(est_h, des_h, esquema)
     LOGGER.info("Prontidão MA: %s", pront[["agrupamento_desfecho", "status"]].to_dict("records"))
 
-    # 5) qualidade
     qual_av = qual_est = None
     concord = {}
     if caminho_qualidade:
@@ -1492,7 +1497,6 @@ def executar_analises(caminho_extracao: str | Path, pasta_saida: str | Path, *, 
                        pastas["05_qualidade"] / "avaliacao_qualidade_JBI.xlsx")
         LOGGER.info("Qualidade: %s", concord)
 
-    # 6) figuras
     figs = gerar_figuras(pastas["04_figuras"], est_h, des_h, mapa_m, mat_falt, pront, esquema, qual_av)
     painel_ordem = [figs[k] for k in ("ano", "mapa", "faltantes", "prontidao", "fisicoquimicos", "qualidade")
                     if k in figs]
@@ -1500,7 +1504,6 @@ def executar_analises(caminho_extracao: str | Path, pasta_saida: str | Path, *, 
         figs["painel"] = montar_painel(painel_ordem, pastas["04_figuras"] / "painel_figuras", esquema)
     LOGGER.info("Figuras geradas: %s", [p.name for p in figs.values()])
 
-    # 7) exportação
     abas = {
         "estudos_harmonizados": est_h, "desfechos_formato_longo": des_h,
         "descritiva_categorica": desc_cat, "descritiva_numerica": desc_num,
@@ -1533,6 +1536,8 @@ def executar_analises(caminho_extracao: str | Path, pasta_saida: str | Path, *, 
             "pendencias": int((pend["status_revisao"] == "pendente").sum()), "figuras": figs,
             "prontidao": pront, "concordancia": concord}
 
+
+# Repositório
 def montar_repositorio(pasta_resultados: str | Path, destino: str | Path, *, codigo: list[Path],
                        estrategias_busca: str | Path | None = None, extras: list[Path] | None = None,
                        compactar: bool = True, pastas_extras: dict[str, Path] | None = None) -> Path:
@@ -1615,6 +1620,8 @@ def montar_repositorio(pasta_resultados: str | Path, destino: str | Path, *, cod
         return zipado
     return dest
 
+
+# Comand
 def _pdfs(args) -> list[Path]:
     arquivos = [Path(p) for p in (args.pdf or [])]
     if args.pasta:
@@ -1639,16 +1646,10 @@ def main(argv=None) -> int:
     s.add_argument("--esquema")
     s.add_argument("--saida", default="extracao_bruta.xlsx")
 
-    s = sub.add_parser("extrair", help="Extração estruturada assistida por LLM")
-    entrada_pdfs(s)
-    s.add_argument("--esquema")
-    s.add_argument("--saida", default="extracao_bruta.xlsx")
-
     s = sub.add_parser("qualidade", help="Pré-avaliação JBI adaptada")
     entrada_pdfs(s)
     s.add_argument("--esquema")
     s.add_argument("--checklist", choices=sorted(CHECKLISTS_JBI))
-    s.add_argument("--usar-llm", action="store_true")
     s.add_argument("--saida", default="avaliacao_qualidade_modelo.xlsx")
 
     s = sub.add_parser("executar", help="Harmonização, tabelas, figuras, prontidão para MA e manifesto")
@@ -1671,11 +1672,10 @@ def main(argv=None) -> int:
         print(f"Esquema salvo em {salvar_esquema_modelo(args.saida)}")
     elif args.comando == "modelo-extracao":
         print(f"Planilha salva em {criar_modelo_extracao(args.saida, carregar_esquema(args.esquema))}")
-    elif args.comando == "extrair":
-
+    elif args.comando == "qualidade":
         esquema = carregar_esquema(args.esquema)
-        configurar_log(Path(args.saida).resolve().parent / "logs")
-        
+        avaliacao = avaliar_qualidade_pdfs(_pdfs(args), args.checklist or esquema["qualidade"]["checklist_padrao"])
+        print(f"Planilha salva em {criar_modelo_qualidade(avaliacao, args.saida, esquema)}")
     elif args.comando == "executar":
         r = executar_analises(args.extracao, args.saida, esquema=carregar_esquema(args.esquema),
                               caminho_correcoes=args.correcoes, caminho_qualidade=args.qualidade,
